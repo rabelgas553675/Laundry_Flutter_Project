@@ -1,0 +1,29 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "laundry-management-syste-39ec1",
+          "appId": "1:619789450816:android:5c36347044bde2afe869a5",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "laundry-management-syste-39ec1",
+          "configurations": {
+            "android": "1:619789450816:android:5c36347044bde2afe869a5",
+            "ios": "1:619789450816:ios:2266d82585d0d2c1e869a5",
+            "macos": "1:619789450816:ios:2266d82585d0d2c1e869a5",
+            "web": "1:619789450816:web:3e4c07c9c7800ac2e869a5",
+            "windows": "1:619789450816:web:5f59d2640665eaeee869a5"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  }
+}

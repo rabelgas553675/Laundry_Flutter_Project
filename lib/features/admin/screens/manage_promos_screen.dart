@@ -1,0 +1,275 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+
+import '../../../core/widgets/empty_state.dart';
+import '../../../core/widgets/error_state.dart';
+import '../../../core/widgets/loading_widget.dart';
+import '../../../data/repositories/promo_repository.dart';
+import '../../../models/promo_model.dart';
+import '../widgets/promo_card.dart';
+import 'add_promo_screen.dart';
+import 'edit_promo_screen.dart';
+
+/// PART 18B — Admin Promotion Management.
+///
+/// Admin can: view all promotions, create promotions, edit
+/// promotions, deactivate promotions, view promotion details (via
+/// [AdminPromoCard] itself — there's no separate details screen,
+/// since a promo has few enough fields to show fully on its card),
+/// search promotions, and filter promotions by status.
+///
+/// Like [ManageServicesScreen] (PART 17), the promo catalog is small
+/// and rarely-changing, so this screen re-fetches once after every
+/// add/edit/toggle rather than holding a permanent Firestore listener
+/// open, via [PromoRepository.getAllPromos].
+///
+/// Reachable only through the `managePromos` route, which [RoleGuard]
+/// (PART 05) restricts to [UserRole.admin] — this screen does no role
+/// checking of its own.
+class ManagePromosScreen extends StatefulWidget {
+  const ManagePromosScreen({super.key, this.repository});
+
+  /// Injectable for widget tests; defaults to a real
+  /// Firestore-backed [PromoRepository].
+  final PromoRepository? repository;
+
+  @override
+  State<ManagePromosScreen> createState() => _ManagePromosScreenState();
+}
+
+class _ManagePromosScreenState extends State<ManagePromosScreen>
+    with SingleTickerProviderStateMixin {
+  late final PromoRepository _repository = widget.repository ?? PromoRepository();
+
+  late final TabController _tabController;
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  late Future<List<PromoModel>> _promosFuture = _load();
+
+  /// Id of the promo whose activate/deactivate switch is mid-flight,
+  /// so only that one card shows a spinner rather than the whole list.
+  String? _togglingPromoId;
+
+  /// One tab per [PromoDisplayStatus], "All" first — matches this
+  /// part's "Filter promotions by status" / "Display status: Active,
+  /// Inactive, Expired, Scheduled" requirements exactly. Index 0 is
+  /// "All"; index `i` (i >= 1) maps to `PromoDisplayStatus.values[i - 1]`.
+  static const _tabs = ['All', 'Active', 'Inactive', 'Expired', 'Scheduled'];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: _tabs.length, vsync: this);
+    _searchController.addListener(() {
+      setState(() => _query = _searchController.text);
+    });
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<List<PromoModel>> _load() => _repository.getAllPromos(forceRefresh: true);
+
+  Future<void> _refresh() async {
+    setState(() => _promosFuture = _load());
+    await _promosFuture;
+  }
+
+  /// Tab filter — client-side over the single fetched list, same
+  /// reasoning [ManageOrdersScreen] (PART 16) gives for doing this
+  /// instead of four/five separate Firestore queries. Uses each
+  /// promo's *computed* [PromoModel.displayStatus] (Active/Inactive/
+  /// Expired/Scheduled), not the raw admin [PromoStatus] on/off flag.
+  List<PromoModel> _filterByTab(List<PromoModel> promos, int tabIndex) {
+    if (tabIndex == 0) return promos;
+    final target = PromoDisplayStatus.values[tabIndex - 1];
+    return promos.where((p) => p.displayStatus() == target).toList();
+  }
+
+  /// Search filter — matches on promo code and description, so an
+  /// admin can find a promotion by whichever detail they remember
+  /// about it.
+  List<PromoModel> _filterBySearch(List<PromoModel> promos, String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return promos;
+    return promos.where((p) {
+      return p.code.toLowerCase().contains(q) || p.description.toLowerCase().contains(q);
+    }).toList();
+  }
+
+  Future<void> _openAddScreen() async {
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => AddPromoScreen(repository: _repository)),
+    );
+    if (saved == true) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Promotion created.')));
+      await _refresh();
+    }
+  }
+
+  Future<void> _openEditScreen(PromoModel promo) async {
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => EditPromoScreen(existing: promo, repository: _repository),
+      ),
+    );
+    if (saved == true) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Promotion updated.')));
+      await _refresh();
+    }
+  }
+
+  /// "Deactivate promotions" (and reactivate them again) — flips the
+  /// raw admin [PromoStatus] on/off flag. A promo already computed as
+  /// Expired can still be toggled here (e.g. an admin reactivating and
+  /// then editing its dates), since [PromoStatus] and
+  /// [PromoDisplayStatus] are deliberately independent — see
+  /// [PromoModel.displayStatus]'s doc comment.
+  Future<void> _toggleStatus(PromoModel promo) async {
+    setState(() => _togglingPromoId = promo.id);
+    try {
+      final newStatus =
+          promo.status == PromoStatus.active ? PromoStatus.inactive : PromoStatus.active;
+      await _repository.updatePromo(promo.copyWith(status: newStatus));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            newStatus == PromoStatus.active
+                ? '${promo.code} is now active.'
+                : '${promo.code} has been deactivated.',
+          ),
+        ),
+      );
+      await _refresh();
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Unable to update this promotion.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Something went wrong. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _togglingPromoId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Manage Promotions'),
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabs: _tabs.map((label) => Tab(text: label)).toList(),
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openAddScreen,
+        icon: const Icon(Icons.add),
+        label: const Text('Add Promo'),
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: TextField(
+                controller: _searchController,
+                textInputAction: TextInputAction.search,
+                decoration: InputDecoration(
+                  hintText: 'Search by promo code or description',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () => _searchController.clear(),
+                        ),
+                  isDense: true,
+                ),
+              ),
+            ),
+            Expanded(
+              child: FutureBuilder<List<PromoModel>>(
+                future: _promosFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const LoadingWidget(message: 'Loading promotions...');
+                  }
+                  if (snapshot.hasError) {
+                    return ErrorState(
+                      message: 'Unable to load promotions. Please try again.',
+                      onRetry: _refresh,
+                    );
+                  }
+
+                  final promos = snapshot.data ?? const <PromoModel>[];
+                  if (promos.isEmpty) {
+                    return EmptyState(
+                      title: 'No promotions yet',
+                      message: 'Create your first promo code to get started.',
+                      icon: Icons.local_offer_outlined,
+                      actionLabel: 'Add Promo',
+                      onAction: _openAddScreen,
+                    );
+                  }
+
+                  return TabBarView(
+                    controller: _tabController,
+                    children: List.generate(_tabs.length, (tabIndex) {
+                      final byTab = _filterByTab(promos, tabIndex);
+                      final filtered = _filterBySearch(byTab, _query);
+
+                      if (filtered.isEmpty) {
+                        return EmptyState(
+                          title: _query.isEmpty
+                              ? 'No promotions in this category yet.'
+                              : 'No promotions match your search.',
+                          icon: Icons.filter_list_off,
+                        );
+                      }
+
+                      return RefreshIndicator(
+                        onRefresh: _refresh,
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
+                          itemCount: filtered.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final promo = filtered[index];
+                            return AdminPromoCard(
+                              promo: promo,
+                              isUpdating: _togglingPromoId == promo.id,
+                              onEdit: () => _openEditScreen(promo),
+                              onToggleStatus: () => _toggleStatus(promo),
+                            );
+                          },
+                        ),
+                      );
+                    }),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
