@@ -27,7 +27,17 @@ import '../../../models/promo_model.dart';
 /// the live PART 11 Order Summary discount total is a follow-up, not
 /// part of this screen.
 class OffersScreen extends StatefulWidget {
-  const OffersScreen({super.key});
+  const OffersScreen({super.key, this.embedded = false});
+
+  /// When `true`, this screen is being shown as one tab of
+  /// [UserDashboard]'s bottom-nav `IndexedStack`, which already
+  /// provides its own gradient app bar above. In that case this
+  /// screen must NOT draw its own `Scaffold`/`AppBar` — doing so
+  /// stacked a second "← Offers & Promo Codes" header directly under
+  /// the dashboard's own bar. When `false` (the default), this screen
+  /// is being pushed on its own via `Navigator.push` and needs its
+  /// own full `Scaffold`/`AppBar` as before.
+  final bool embedded;
 
   @override
   State<OffersScreen> createState() => _OffersScreenState();
@@ -114,72 +124,80 @@ class _OffersScreenState extends State<OffersScreen> {
     _applyCode();
   }
 
+  Widget _buildBody() {
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _RedeemCodeCard(
+            codeController: _codeController,
+            subtotalController: _subtotalController,
+            isChecking: _isChecking,
+            result: _result,
+            onApply: _applyCode,
+          ),
+          const SizedBox(height: 20),
+          Text('Active Promotions', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          FutureBuilder<List<PromoModel>>(
+            future: _promosFuture,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 32),
+                  child: LoadingWidget(message: 'Loading promotions...'),
+                );
+              }
+              if (snapshot.hasError) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: ErrorState(
+                    message: 'We couldn\'t load current promotions. Please try again.',
+                    onRetry: _refresh,
+                  ),
+                );
+              }
+              final promos = snapshot.data ?? const <PromoModel>[];
+              if (promos.isEmpty) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: EmptyState(
+                    icon: Icons.local_offer_outlined,
+                    title: 'No active promotions right now',
+                    message: 'Check back soon — new offers show up here automatically.',
+                  ),
+                );
+              }
+              return Column(
+                children: promos
+                    .map((promo) => Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _PromoCard(
+                            promo: promo,
+                            onUseCode: () => _useCode(promo.code),
+                          ),
+                        ))
+                    .toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.embedded) {
+      // No Scaffold/AppBar here — the dashboard's own gradient bar is
+      // the only header.
+      return _buildBody();
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('Offers & Promo Codes')),
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _refresh,
-          child: ListView(
-            padding: const EdgeInsets.all(16),
-            children: [
-              _RedeemCodeCard(
-                codeController: _codeController,
-                subtotalController: _subtotalController,
-                isChecking: _isChecking,
-                result: _result,
-                onApply: _applyCode,
-              ),
-              const SizedBox(height: 20),
-              Text('Active Promotions', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              FutureBuilder<List<PromoModel>>(
-                future: _promosFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 32),
-                      child: LoadingWidget(message: 'Loading promotions...'),
-                    );
-                  }
-                  if (snapshot.hasError) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: ErrorState(
-                        message: 'We couldn\'t load current promotions. Please try again.',
-                        onRetry: _refresh,
-                      ),
-                    );
-                  }
-                  final promos = snapshot.data ?? const <PromoModel>[];
-                  if (promos.isEmpty) {
-                    return const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 24),
-                      child: EmptyState(
-                        icon: Icons.local_offer_outlined,
-                        title: 'No active promotions right now',
-                        message: 'Check back soon — new offers show up here automatically.',
-                      ),
-                    );
-                  }
-                  return Column(
-                    children: promos
-                        .map((promo) => Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: _PromoCard(
-                                promo: promo,
-                                onUseCode: () => _useCode(promo.code),
-                              ),
-                            ))
-                        .toList(),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
+      body: SafeArea(child: _buildBody()),
     );
   }
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
+import '../../../core/widgets/auth_header.dart';
 import '../../../data/repositories/auth_repository.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
@@ -58,11 +59,29 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Same shell as Login/Register: no AppBar — the AuthHeader carries
+    // its own back button and the same hero photo/rounded-corner
+    // treatment, so all three auth screens now read as one family.
     return Scaffold(
-      appBar: AppBar(title: const Text('Forgot Password')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: _emailSent ? _buildSuccessState(context) : _buildFormState(context),
+      body: SafeArea(
+        top: false,
+        bottom: false,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AuthHeader(
+                title: 'Forgot password',
+                subtitle: "We'll help you get back into your account.",
+                onBack: () => Navigator.pop(context),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                child: _emailSent ? _buildSuccessState(context) : _buildFormState(context),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -74,8 +93,6 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Icon(Icons.lock_reset_outlined, size: 48, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 16),
           Text(
             'Enter the email associated with your account and we\'ll send a link to reset your password.',
             textAlign: TextAlign.center,

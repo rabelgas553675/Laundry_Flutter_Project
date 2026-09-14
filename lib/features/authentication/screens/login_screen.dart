@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../../app/routes.dart';
 import '../../../core/services/auth_state.dart';
+import '../../../core/widgets/auth_header.dart';
 import '../../../data/repositories/auth_repository.dart';
 import '../widgets/login_form.dart';
 
@@ -24,6 +25,8 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _errorMessage;
   bool _didCheckArguments = false;
 
+  static const double _maxFormWidth = 480;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -31,7 +34,8 @@ class _LoginScreenState extends State<LoginScreen> {
     _didCheckArguments = true;
     final args = ModalRoute.of(context)?.settings.arguments;
     if (args is Map && args['deactivated'] == true) {
-      _errorMessage = 'This account has been deactivated. Please contact support.';
+      _errorMessage =
+          'This account has been deactivated. Please contact support.';
     }
   }
 
@@ -42,9 +46,6 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      // Auth-only sign-in: verifies credentials against Firebase Auth and
-      // returns as soon as that resolves, WITHOUT also waiting on the
-      // Firestore profile lookup.
       final user = await _authRepository.signInAuthOnly(
         email: email,
         password: password,
@@ -52,14 +53,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (!mounted) return;
 
-      // Tell AuthState synchronously so RoleGuard doesn't briefly see
-      // stale "unauthenticated" state and bounce back to /login.
-      // Deliberately not awaited: markSignedIn drives its own profile
-      // fetch through to `authenticated` internally (see its doc
-      // comment), so the dashboard route can be pushed immediately —
-      // RoleGuard shows its own spinner and updates the moment that
-      // fetch resolves, without this screen needing to block on it.
       unawaited(AuthState.instance.markSignedIn(user));
+
+      if (!mounted) return;
 
       Navigator.pushReplacementNamed(
         context,
@@ -72,7 +68,9 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = 'Something went wrong. Please try again.');
+        setState(
+          () => _errorMessage = 'Something went wrong. Please try again.',
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -81,19 +79,110 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Log In')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: LoginForm(
-          isLoading: _isLoading,
-          errorMessage: _errorMessage,
-          onSubmit: _handleLogin,
-          onForgotPassword: () =>
-              Navigator.pushNamed(context, AppRoutes.forgotPassword),
-          onCreateAccount: () =>
-              Navigator.pushNamed(context, AppRoutes.register),
+      backgroundColor: colorScheme.surface,
+      body: SafeArea(
+        top: false,
+        bottom: false,
+        child: SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const AuthHeader(
+                title: 'Welcome back',
+                subtitle:
+                    'Log in to pick up right where your last order left off.',
+              ),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: _maxFormWidth),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 32,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 250),
+                          child: _errorMessage != null
+                              ? _ErrorBanner(
+                                  key: ValueKey(_errorMessage),
+                                  message: _errorMessage!,
+                                )
+                              : const SizedBox.shrink(),
+                        ),
+                        LoginForm(
+                          isLoading: _isLoading,
+                          errorMessage: null, // Driven by _ErrorBanner above
+                          onSubmit: _handleLogin,
+                          onForgotPassword: () => Navigator.pushNamed(
+                            context,
+                            AppRoutes.forgotPassword,
+                          ),
+                          onCreateAccount: () => Navigator.pushNamed(
+                            context,
+                            AppRoutes.register,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// A sleek, modern error message banner with subtle entry transition.
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner({super.key, required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: colorScheme.errorContainer.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: colorScheme.error.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.error_outline_rounded,
+            color: colorScheme.error,
+            size: 20,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(
+                color: colorScheme.onErrorContainer,
+                fontSize: 13.5,
+                fontWeight: FontWeight.w500,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

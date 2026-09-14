@@ -16,7 +16,17 @@ import 'order_details_screen.dart';
 /// Ready / Completed) happens client-side over that one stream so a
 /// single Firestore listener backs the whole screen.
 class MyOrdersScreen extends StatefulWidget {
-  const MyOrdersScreen({super.key});
+  const MyOrdersScreen({super.key, this.embedded = false});
+
+  /// When `true`, this screen is being shown as one tab of
+  /// [UserDashboard]'s bottom-nav `IndexedStack`, which already
+  /// provides its own gradient app bar above. In that case this
+  /// screen must NOT draw its own `Scaffold`/`AppBar` (that produced
+  /// a duplicated "back arrow + title" header stacked directly under
+  /// the dashboard's own bar). When `false` (the default), this
+  /// screen is being pushed on its own via `Navigator.push` and needs
+  /// its own full `Scaffold`/`AppBar` as before.
+  final bool embedded;
 
   @override
   State<MyOrdersScreen> createState() => _MyOrdersScreenState();
@@ -89,8 +99,35 @@ class _MyOrdersScreenState extends State<MyOrdersScreen>
 
   @override
   Widget build(BuildContext context) {
-    final userId = AuthState.instance.firebaseUser?.uid;
-    final stream = _ordersStream;
+    final body = _Body(
+      tabController: _tabController,
+      tabs: _tabs,
+      ordersStream: _ordersStream,
+      orderRepository: _orderRepository,
+      filter: _filter,
+      onRetryStream: (userId) => setState(() {
+        _ordersStream = _orderRepository.streamOrdersForUser(userId);
+      }),
+      onRefresh: () async => setState(() {}),
+    );
+
+    if (widget.embedded) {
+      // No Scaffold/AppBar here — the dashboard's own gradient bar is
+      // the only header. Just the tab strip + tab content.
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TabBar(
+            controller: _tabController,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            tabs: _tabs.map((label) => Tab(text: label)).toList(),
+          ),
+          const SizedBox(height: 8),
+          Expanded(child: body),
+        ],
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -101,65 +138,96 @@ class _MyOrdersScreenState extends State<MyOrdersScreen>
           tabs: _tabs.map((label) => Tab(text: label)).toList(),
         ),
       ),
-      body: (userId == null || stream == null)
-          ? const ErrorState(message: 'Your session has expired. Please log in again.')
-          : StreamBuilder<List<OrderModel>>(
-              stream: stream,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const LoadingWidget();
-                }
-                if (snapshot.hasError) {
-                  return ErrorState(
-                    message: 'Unable to load your orders. Please try again.',
-                    onRetry: () => setState(() {
-                      _ordersStream = _orderRepository.streamOrdersForUser(userId);
-                    }),
-                  );
-                }
+      body: body,
+    );
+  }
+}
 
-                final orders = snapshot.data ?? const <OrderModel>[];
-                if (orders.isEmpty) {
-                  return const EmptyState(
-                    title: "You haven't placed any orders yet.",
-                    icon: Icons.receipt_long_outlined,
-                  );
-                }
+/// The tab content shared by both the standalone (`Scaffold`-wrapped)
+/// and embedded (dashboard-tab) presentations, so the two code paths
+/// above can never drift out of sync with each other.
+class _Body extends StatelessWidget {
+  const _Body({
+    required this.tabController,
+    required this.tabs,
+    required this.ordersStream,
+    required this.orderRepository,
+    required this.filter,
+    required this.onRetryStream,
+    required this.onRefresh,
+  });
 
-                return TabBarView(
-                  controller: _tabController,
-                  children: List.generate(_tabs.length, (tabIndex) {
-                    final filtered = _filter(orders, tabIndex);
-                    if (filtered.isEmpty) {
-                      return const EmptyState(
-                        title: 'No orders in this category yet.',
-                        icon: Icons.filter_list_off,
-                      );
-                    }
-                    return RefreshIndicator(
-                      onRefresh: () async => setState(() {}),
-                      child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: filtered.length,
-                        separatorBuilder: (context, index) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) {
-                          final order = filtered[index];
-                          return OrderListTile(
-                            order: order,
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => OrderDetailsScreen(order: order),
-                              ),
-                            ),
-                          );
-                        },
+  final TabController tabController;
+  final List<String> tabs;
+  final Stream<List<OrderModel>>? ordersStream;
+  final OrderRepository orderRepository;
+  final List<OrderModel> Function(List<OrderModel> orders, int tabIndex) filter;
+  final ValueChanged<String> onRetryStream;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final userId = AuthState.instance.firebaseUser?.uid;
+    final stream = ordersStream;
+
+    if (userId == null || stream == null) {
+      return const ErrorState(message: 'Your session has expired. Please log in again.');
+    }
+
+    return StreamBuilder<List<OrderModel>>(
+      stream: stream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingWidget();
+        }
+        if (snapshot.hasError) {
+          return ErrorState(
+            message: 'Unable to load your orders. Please try again.',
+            onRetry: () => onRetryStream(userId),
+          );
+        }
+
+        final orders = snapshot.data ?? const <OrderModel>[];
+        if (orders.isEmpty) {
+          return const EmptyState(
+            title: "You haven't placed any orders yet.",
+            icon: Icons.receipt_long_outlined,
+          );
+        }
+
+        return TabBarView(
+          controller: tabController,
+          children: List.generate(tabs.length, (tabIndex) {
+            final filtered = filter(orders, tabIndex);
+            if (filtered.isEmpty) {
+              return const EmptyState(
+                title: 'No orders in this category yet.',
+                icon: Icons.filter_list_off,
+              );
+            }
+            return RefreshIndicator(
+              onRefresh: onRefresh,
+              child: ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: filtered.length,
+                separatorBuilder: (context, index) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final order = filtered[index];
+                  return OrderListTile(
+                    order: order,
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => OrderDetailsScreen(order: order),
                       ),
-                    );
-                  }),
-                );
-              },
-            ),
+                    ),
+                  );
+                },
+              ),
+            );
+          }),
+        );
+      },
     );
   }
 }

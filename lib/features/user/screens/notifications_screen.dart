@@ -44,6 +44,7 @@ class NotificationsScreen extends StatefulWidget {
     super.key,
     this.notificationService,
     this.orderRepository,
+    this.embedded = false,
   });
 
   /// Injectable for widget tests; defaults to a real
@@ -52,6 +53,16 @@ class NotificationsScreen extends StatefulWidget {
   /// service/repository.
   final NotificationService? notificationService;
   final OrderRepository? orderRepository;
+
+  /// When `true`, this screen is being shown as one tab of
+  /// [UserDashboard]'s bottom-nav `IndexedStack`, which already
+  /// provides its own gradient app bar above. In that case this
+  /// screen must NOT draw its own `Scaffold`/`AppBar` — doing so
+  /// stacked a second "Notifications" title bar directly under the
+  /// dashboard's own bar. When `false` (the default), this screen is
+  /// being pushed on its own via `Navigator.push` and needs its own
+  /// full `Scaffold`/`AppBar` as before.
+  final bool embedded;
 
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
@@ -209,16 +220,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildBody() {
     final String? userId = AuthState.instance.firebaseUser?.uid;
     final stream = _notificationsStream;
 
     if (userId == null || stream == null) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Notifications')),
-        body: const ErrorState(message: 'Your session has expired. Please log in again.'),
-      );
+      return const ErrorState(message: 'Your session has expired. Please log in again.');
     }
 
     // Captured as a definitely-non-null local so the retry callback
@@ -226,46 +233,57 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     // on flow-analysis promotion carrying through the closure.
     final String currentUserId = userId;
 
+    return StreamBuilder<List<NotificationModel>>(
+      stream: stream,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingWidget();
+        }
+        if (snapshot.hasError) {
+          return ErrorState(
+            message: 'Unable to load notifications. Please check your connection.',
+            onRetry: () => setState(() {
+              _notificationsStream =
+                  _notificationService.streamUserNotifications(currentUserId);
+            }),
+          );
+        }
+
+        final notifications = snapshot.data ?? const <NotificationModel>[];
+        if (notifications.isEmpty) {
+          return const EmptyState(
+            icon: Icons.notifications_none_outlined,
+            title: 'No notifications yet',
+            message: 'Updates about your orders will show up here.',
+          );
+        }
+
+        return ListView.separated(
+          padding: const EdgeInsets.all(16),
+          itemCount: notifications.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 10),
+          itemBuilder: (context, index) {
+            return _NotificationTile(
+              notification: notifications[index],
+              onTap: () => _openNotification(notifications[index]),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.embedded) {
+      // No Scaffold/AppBar here — the dashboard's own gradient bar is
+      // the only header.
+      return _buildBody();
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('Notifications')),
-      body: StreamBuilder<List<NotificationModel>>(
-        stream: stream,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const LoadingWidget();
-          }
-          if (snapshot.hasError) {
-            return ErrorState(
-              message: 'Unable to load notifications. Please check your connection.',
-              onRetry: () => setState(() {
-                _notificationsStream =
-                    _notificationService.streamUserNotifications(currentUserId);
-              }),
-            );
-          }
-
-          final notifications = snapshot.data ?? const <NotificationModel>[];
-          if (notifications.isEmpty) {
-            return const EmptyState(
-              icon: Icons.notifications_none_outlined,
-              title: 'No notifications yet',
-              message: 'Updates about your orders will show up here.',
-            );
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.all(16),
-            itemCount: notifications.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 10),
-            itemBuilder: (context, index) {
-              return _NotificationTile(
-                notification: notifications[index],
-                onTap: () => _openNotification(notifications[index]),
-              );
-            },
-          );
-        },
-      ),
+      body: _buildBody(),
     );
   }
 }

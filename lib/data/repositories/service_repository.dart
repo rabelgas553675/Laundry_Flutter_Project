@@ -52,14 +52,26 @@ class ServiceRepository {
     return _datasource.getAllServices();
   }
 
-  /// Idempotent: only writes the default catalog the very first time
-  /// there are zero service documents, so re-running the app never
-  /// duplicates services. Safe to call from a widget's initState/build
-  /// path since it's a no-op on every call after the first.
+  /// Seeds whichever entries in [kDefaultServices] don't already exist
+  /// yet, matched by name (case-insensitive).
+  ///
+  /// This used to only run when the whole collection was empty, which
+  /// meant that once *any* services existed — even just 2 out of 3,
+  /// from an earlier version of this list or a manual console edit —
+  /// it would never seed the rest. That's why Premium Wash could go
+  /// missing forever even after being added to [kDefaultServices].
+  /// Checking by name makes this self-healing: safe to call on every
+  /// app start, and it naturally catches up if you add a 4th default
+  /// later too.
   Future<void> seedDefaultServicesIfEmpty() async {
-    final existing = await _datasource.countAll();
-    if (existing > 0) return;
-    await _datasource.seedDefaults(kDefaultServices);
+    final existingNames = await _datasource.getExistingServiceNames();
+    final missing = kDefaultServices
+        .where((service) => !existingNames.contains(service.name.toLowerCase().trim()))
+        .toList();
+
+    if (missing.isEmpty) return;
+
+    await _datasource.seedDefaults(missing);
     _cachedActive = null; // force a fresh read next call
   }
 

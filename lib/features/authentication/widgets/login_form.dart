@@ -73,19 +73,7 @@ class _LoginFormState extends State<LoginForm> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: 16),
-          Icon(
-            Icons.local_laundry_service_outlined,
-            size: 48,
-            color: Theme.of(context).colorScheme.primary,
-          ),
           const SizedBox(height: 8),
-          Text(
-            'Welcome back',
-            style: Theme.of(context).textTheme.headlineMedium,
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 24),
           AppTextField(
             label: 'Email',
             controller: _emailController,

@@ -63,6 +63,22 @@ class ServiceDatasource {
     return agg.count ?? 0;
   }
 
+  /// Names of every existing service document, lowercased for a
+  /// case-insensitive comparison against `kDefaultServices`.
+  ///
+  /// Used to seed only the defaults that are actually missing, instead
+  /// of an all-or-nothing "collection is empty" check — that's what
+  /// let Premium Wash silently never get created once Quick Wash and
+  /// Standard Wash already existed.
+  Future<Set<String>> getExistingServiceNames() async {
+    final snapshot = await _servicesRef
+        .get()
+        .timeout(_timeout, onTimeout: () => throw _timeoutException('checking services'));
+    return snapshot.docs
+        .map((doc) => (doc.data()['name'] as String? ?? '').toLowerCase().trim())
+        .toSet();
+  }
+
   Future<void> createService(ServiceModel service) {
     return _servicesRef
         .doc(service.id.isEmpty ? null : service.id)
@@ -70,8 +86,10 @@ class ServiceDatasource {
         .timeout(_timeout, onTimeout: () => throw _timeoutException('saving the service'));
   }
 
-  /// Batch-writes the PART 08 default catalog in one round trip.
+  /// Batch-writes whichever default services are passed in (already
+  /// filtered down to the missing ones by the repository).
   Future<void> seedDefaults(List<ServiceModel> defaults) async {
+    if (defaults.isEmpty) return;
     final batch = FirebaseService.firestore.batch();
     for (final service in defaults) {
       batch.set(_servicesRef.doc(), service.toMapForCreate());

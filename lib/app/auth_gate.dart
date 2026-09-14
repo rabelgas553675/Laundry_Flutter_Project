@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/services/auth_state.dart';
-import '../features/authentication/screens/login_screen.dart';
+import '../features/welcome/screens/welcome_screen.dart';
 import '../models/user_model.dart';
 import 'routes.dart';
 
@@ -14,9 +14,11 @@ import 'routes.dart';
 ///
 /// - Still resolving the session (`AuthStatus.loading`, no cached
 ///   profile yet) → a bare loading spinner.
-/// - No session (`AuthStatus.unauthenticated`) → [LoginScreen],
+/// - No session (`AuthStatus.unauthenticated`) → [WelcomeScreen],
 ///   shown directly rather than navigated to, since this *is* the
-///   root of the navigation stack.
+///   root of the navigation stack. Explicit sign-outs elsewhere in
+///   the app go straight to `AppRoutes.login` instead — this landing
+///   screen is only for a visitor's very first impression.
 /// - A session exists → hands off to the already-guarded named
 ///   dashboard route for that role ([AppRoutes.adminDashboard] /
 ///   [AppRoutes.userDashboard]) via [Navigator.pushReplacementNamed],
@@ -83,7 +85,7 @@ class _AuthGateState extends State<AuthGate> {
       // a future sign-in from this same still-mounted instance can
       // redirect again.
       _redirected = false;
-      return const LoginScreen();
+      return const WelcomeScreen();
     }
 
     final role = auth.role;
