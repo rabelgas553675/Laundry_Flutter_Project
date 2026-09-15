@@ -89,10 +89,17 @@ class ServiceSelectionCard extends StatefulWidget {
   const ServiceSelectionCard({
     super.key,
     this.onServiceTap,
+    this.onSeeAll,
     this._repository,
   });
 
   final ValueChanged<ServiceModel>? onServiceTap;
+
+  /// Called when "See all" is tapped — mirrors
+  /// CurrentOffersSection.onSeeAll (same accent-link styling). The
+  /// link is still shown if this is null; it simply won't do anything.
+  final VoidCallback? onSeeAll;
+
   final ServiceRepository? _repository;
 
   @override
@@ -197,12 +204,37 @@ class _ServiceSelectionCardState extends State<ServiceSelectionCard> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Our Services',
-                style: textTheme.titleMedium?.copyWith(
-                  color: Colors.black87,
-                  fontWeight: FontWeight.w700,
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Our Services',
+                    style: textTheme.titleMedium?.copyWith(
+                      color: Colors.black87,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  // Matches CurrentOffersSection's "See all" link exactly
+                  // (same padding/hit-area, textTheme.labelLarge, accent
+                  // color) so both dashboard sections read as one family.
+                  GestureDetector(
+                    onTap: widget.onSeeAll,
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 4,
+                      ),
+                      child: Text(
+                        'See all',
+                        style: textTheme.labelLarge?.copyWith(
+                          color: colors.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
               SizedBox(

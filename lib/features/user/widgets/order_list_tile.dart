@@ -1,13 +1,19 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/price_calculator.dart';
-import '../../../core/widgets/app_card.dart';
 import '../../../models/order_model.dart';
 
 /// PART 13 — a single row in "My Orders": order number, service,
-/// weight, total, date, and a status pill. Tapping it is the only
-/// way into [OrderDetailsScreen]; the tap callback is owned by the
-/// parent screen so navigation stays out of this widget.
+/// weight, total, date, and a status pill.
+///
+/// Redesigned to match the dashboard's frosted-glass language
+/// (see `user_dashboard.dart`): a blurred translucent-white card with
+/// a soft border, drop shadow, and a colored accent stripe on the
+/// left, instead of a plain [AppCard]. Tapping it is the only way
+/// into [OrderDetailsScreen]; the tap callback is owned by the parent
+/// screen so navigation stays out of this widget.
 class OrderListTile extends StatelessWidget {
   const OrderListTile({super.key, required this.order, required this.onTap});
 
@@ -20,47 +26,106 @@ class OrderListTile extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final status = OrderStatusStyle.of(order.status);
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: AppCard(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    order.orderNumber,
-                    style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: Material(
+            color: Colors.white.withValues(alpha: 0.22),
+            child: InkWell(
+              onTap: onTap,
+              splashColor: colors.primary.withValues(alpha: 0.08),
+              highlightColor: colors.primary.withValues(alpha: 0.04),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.45)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Accent stripe — mirrors the app bar's left
+                      // accent bar, colored by order status so the
+                      // whole list reads at a glance.
+                      Container(
+                        width: 4,
+                        decoration: BoxDecoration(
+                          color: status.color,
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(20),
+                            bottomLeft: Radius.circular(20),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      order.orderNumber,
+                                      style: textTheme.titleSmall?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                        color: Colors.black87,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${order.serviceName} · ${order.weight.toStringAsFixed(1)} kg',
+                                      style: textTheme.bodyMedium?.copyWith(
+                                        color: Colors.black54,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      formatOrderDate(order.createdAt),
+                                      style: textTheme.bodySmall?.copyWith(
+                                        color: Colors.black45,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    PriceCalculator.formatCurrency(order.total),
+                                    style: textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  _StatusPill(style: status),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${order.serviceName} · ${order.weight.toStringAsFixed(1)} kg',
-                    style: textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    formatOrderDate(order.createdAt),
-                    style: textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
-                  ),
-                ],
+                ),
               ),
             ),
-            const SizedBox(width: 12),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  PriceCalculator.formatCurrency(order.total),
-                  style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 6),
-                _StatusPill(style: status),
-              ],
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -96,6 +161,9 @@ class OrderStatusStyle {
   }
 }
 
+/// Solid-fill pill (rather than the previous tinted-background style)
+/// so it reads clearly against the new translucent glass card, where
+/// a low-opacity tint tends to wash out.
 class _StatusPill extends StatelessWidget {
   const _StatusPill({required this.style});
 
@@ -106,14 +174,21 @@ class _StatusPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: style.color.withValues(alpha: 0.12),
+        color: style.color,
         borderRadius: BorderRadius.circular(999),
+        boxShadow: [
+          BoxShadow(
+            color: style.color.withValues(alpha: 0.35),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Text(
         style.label,
-        style: TextStyle(
-          color: style.color,
-          fontWeight: FontWeight.w600,
+        style: const TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
           fontSize: 12,
         ),
       ),

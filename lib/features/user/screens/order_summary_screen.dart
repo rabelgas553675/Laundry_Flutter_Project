@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,14 @@ import '../../../data/repositories/order_repository.dart';
 import '../../../data/services/notification_service.dart';
 import '../../../models/order_draft_model.dart';
 import '../../../models/order_model.dart';
+
+/// Brand blue used across the app's glass UI (dashboard app bar/nav,
+/// the order form's Stepper shell). Kept local to this file, same as
+/// `laundry_order_screen.dart` does with its own `_kBrandBlue`, so
+/// this screen matches without introducing a shared constant this
+/// part isn't scoped to touch.
+const Color _kBrandBlue = Color(0xff0D47A1);
+const Color _kBrandBlueLight = Color(0xff8EC5FC);
 
 /// PART 11.2/11.3/12.4 — read-only review of a completed PART 10
 /// order, priced using PART 11.1's [PriceCalculator], that actually
@@ -35,6 +44,12 @@ import '../../../models/order_model.dart';
 /// dialog shows the generated order number and Pending status, and
 /// Firebase/network failures surface a friendly retry-able message
 /// instead of a raw exception.
+///
+/// The visual shell (app bar, blurred-blob background, white content
+/// sheet) was restyled to match `laundry_order_screen.dart` and
+/// `user_dashboard.dart`'s frosted-glass look — see [_buildShell] at
+/// the bottom of [build]. None of the submission logic, validation,
+/// or state below was touched.
 class OrderSummaryScreen extends StatefulWidget {
   const OrderSummaryScreen({super.key, required this.order});
 
@@ -329,8 +344,34 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     );
   }
 
+  // -------------------- Build --------------------
+
   @override
   Widget build(BuildContext context) {
+    // Local Theme override, same trick as `laundry_order_screen.dart`:
+    // AppButton's FilledButton/OutlinedButton styling reads
+    // `colorScheme.primary` by default, so this keeps "Confirm Order"
+    // and "Back" the same brand blue as the rest of the glass UI
+    // without touching theme.dart.
+    final baseTheme = Theme.of(context);
+
+    return Theme(
+      data: baseTheme.copyWith(
+        colorScheme: baseTheme.colorScheme.copyWith(
+          primary: _kBrandBlue,
+          secondary: _kBrandBlue,
+        ),
+      ),
+      child: Builder(builder: _buildShell),
+    );
+  }
+
+  /// The actual screen shell: glass app bar + blurred-blob background
+  /// (matching `user_dashboard.dart` / `laundry_order_screen.dart`)
+  /// with the three summary cards and action buttons sitting on a
+  /// rounded white sheet for contrast. [context] here already carries
+  /// the blue-primary [Theme] override from [build].
+  Widget _buildShell(BuildContext context) {
     final breakdown = PriceCalculator.calculate(
       servicePricePerKg: widget.order.service.pricePerKg,
       weightKg: widget.order.weightKg,
@@ -340,39 +381,238 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
     );
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Order Summary')),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _OrderDetailsCard(order: widget.order),
-            _DeliveryCard(order: widget.order),
-            _PriceSummaryCard(order: widget.order, breakdown: breakdown),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Expanded(
-                  child: AppButton(
-                    label: 'Back',
-                    variant: AppButtonVariant.outlined,
-                    onPressed: _isSubmitting ? null : () => Navigator.pop(context),
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: const _GlassSummaryAppBar(title: 'Order Summary'),
+      body: Stack(
+        children: [
+          const Positioned.fill(child: _SummaryScreenBackground()),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(28),
+                  topRight: Radius.circular(28),
+                ),
+                child: Container(
+                  width: double.infinity,
+                  height: double.infinity,
+                  color: Colors.white.withValues(alpha: 0.96),
+                  child: ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      _OrderDetailsCard(order: widget.order),
+                      const SizedBox(height: 12),
+                      _DeliveryCard(order: widget.order),
+                      const SizedBox(height: 12),
+                      _PriceSummaryCard(order: widget.order, breakdown: breakdown),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: AppButton(
+                              label: 'Back',
+                              variant: AppButtonVariant.outlined,
+                              onPressed: _isSubmitting ? null : () => Navigator.pop(context),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: AppButton(
+                              label: _isSubmitting ? 'Placing Order...' : 'Confirm Order',
+                              icon: _isSubmitting ? null : Icons.check_circle_outline,
+                              isLoading: _isSubmitting,
+                              onPressed: _isSubmitting
+                                  ? null
+                                  : () => _handleConfirmOrder(context, breakdown),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: AppButton(
-                    label: _isSubmitting ? 'Placing Order...' : 'Confirm Order',
-                    icon: _isSubmitting ? null : Icons.check_circle_outline,
-                    isLoading: _isSubmitting,
-                    onPressed: _isSubmitting
-                        ? null
-                        : () => _handleConfirmOrder(context, breakdown),
-                  ),
-                ),
-              ],
+              ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Frosted-glass app bar for the summary screen — same recipe as
+/// `_GlassOrderAppBar` in `laundry_order_screen.dart` (blurred
+/// translucent bar, rounded bottom corners, accent stripe, back
+/// arrow), duplicated locally rather than imported since that class
+/// is private to its own file.
+class _GlassSummaryAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _GlassSummaryAppBar({required this.title});
+
+  final String title;
+
+  static const double _contentHeight = 64;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(_contentHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(24),
+        bottomRight: Radius.circular(24),
+      ),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.18),
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(24),
+              bottomRight: Radius.circular(24),
+            ),
+            border: Border(
+              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.5), width: 1),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _kBrandBlue.withValues(alpha: 0.10),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: SizedBox(
+              height: _contentHeight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(6, 0, 18, 0),
+                child: Row(
+                  children: [
+                    _GlassSummaryBackButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      width: 3,
+                      height: 18,
+                      margin: const EdgeInsets.only(right: 10),
+                      decoration: BoxDecoration(
+                        color: _kBrandBlue,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _GlassSummaryBackButton extends StatelessWidget {
+  const _GlassSummaryBackButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(100),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.25),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            tooltip: 'Back',
+            icon: const Icon(Icons.arrow_back_rounded, color: Colors.black87, size: 19),
+            onPressed: onPressed,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Same blurred-blob backdrop as `_OrderScreenBackground` in
+/// `laundry_order_screen.dart` — two blobs, since this is also a
+/// secondary screen sitting mostly behind a white content sheet.
+class _SummaryScreenBackground extends StatelessWidget {
+  const _SummaryScreenBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xfff4f6fb),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: -90,
+            right: -70,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [_kBrandBlue, Color(0xffB3E5FC)],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 220,
+            left: -90,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _kBrandBlueLight.withValues(alpha: 0.4),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

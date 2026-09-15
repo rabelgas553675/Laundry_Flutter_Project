@@ -110,6 +110,9 @@ flutter:
     - assets/images/quick_wash.png
     - assets/images/standard_wash.png
     - assets/images/premium_wash.png
+    - assets/images/dry_cleaning.jpg
+    - assets/images/wash_and_ironing.jpg
+    - assets/images/service_bundle.jpg
     - assets/images/offers/first_order_discount.png
     - assets/images/offers/weekend_bundle.png
 

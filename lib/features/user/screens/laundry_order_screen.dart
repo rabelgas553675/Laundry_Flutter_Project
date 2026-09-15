@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import '../../../app/constants.dart';
@@ -21,6 +23,14 @@ import 'order_summary_screen.dart';
 /// promoted to a models/ file yet.
 enum DeliveryMethod { pickup, dropoff }
 
+/// Brand blue used across the dashboard's glass UI
+/// (`user_dashboard.dart`'s `_DashboardBackground`/`_DashboardAppBar`).
+/// Pulled out here so the Stepper/step-content override below and the
+/// two small shell widgets at the bottom of this file always agree
+/// with the rest of the app instead of drifting to a local guess.
+const Color _kBrandBlue = Color(0xff0D47A1);
+const Color _kBrandBlueLight = Color(0xff8EC5FC);
+
 /// PART 10 — the customer's laundry order form.
 ///
 /// Built incrementally across three sub-parts, all inside this one
@@ -29,9 +39,16 @@ enum DeliveryMethod { pickup, dropoff }
 ///   • 10.2: Select Detergent, Select Pickup/Drop-off (Address,
 ///     Phone, Landmark shipped as plain fields; Location shipped as
 ///     a placeholder text field)
-///   • 10.3 (this part): the real Location selection interface, plus
-///     a whole-form validation pass gating the final "Proceed"
-///     button
+///   • 10.3: the real Location selection interface, plus a whole-form
+///     validation pass gating the final "Proceed" button
+///
+/// The visual shell (app bar, background, Stepper/step colors) was
+/// restyled to match `user_dashboard.dart`'s frosted-glass look — see
+/// [_buildShell] at the bottom of [build]. The outer content sheet and
+/// the "Select Service" step's own content are both frosted glass
+/// (translucent + blurred) rather than solid white, so the background
+/// blobs show through. None of the step logic, validation, or state
+/// below was touched.
 ///
 /// Everything the customer picks is kept only in this screen's state
 /// for now — PART 11 adds price calculation, and PART 12 is the first
@@ -312,271 +329,546 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Local Theme override: Stepper's active/complete step circles and
+    // the selection widgets' Radios both read `colorScheme.primary` by
+    // default in Material 3, and AppButton very likely does too — this
+    // is what turns the previous plain-black circles/radio/button blue
+    // to match the dashboard, without needing to touch theme.dart or
+    // any of the selection widgets themselves.
+    final baseTheme = Theme.of(context);
+
+    return Theme(
+      data: baseTheme.copyWith(
+        colorScheme: baseTheme.colorScheme.copyWith(
+          primary: _kBrandBlue,
+          secondary: _kBrandBlue,
+        ),
+      ),
+      child: Builder(builder: _buildShell),
+    );
+  }
+
+  /// The actual screen shell: glass app bar + blurred-blob background
+  /// (matching `user_dashboard.dart`), with the Stepper now sitting on
+  /// a frosted-glass sheet (translucent + blurred, matching the app
+  /// bar's recipe) instead of solid white, so the background blobs
+  /// show through. [context] here already carries the blue-primary
+  /// [Theme] override from [build].
+  Widget _buildShell(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('New Laundry Order')),
-      body: SafeArea(
-        child: Stepper(
-          type: StepperType.vertical,
-          currentStep: _currentStep,
-          onStepContinue: _handleStepContinue,
-          onStepCancel: _handleStepCancel,
-          onStepTapped: _handleStepTapped,
-          controlsBuilder: (context, details) {
-            final isFinalStep = details.stepIndex == _finalStepIndex;
-            return Padding(
-              padding: const EdgeInsets.only(top: 16),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: AppButton(
-                      label: isFinalStep ? 'Proceed' : 'Continue',
-                      icon: isFinalStep ? Icons.check_circle_outline : null,
-                      onPressed: details.onStepContinue,
-                    ),
-                  ),
-                  if (details.stepIndex > 0) ...[
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: AppButton(
-                        label: 'Back',
-                        variant: AppButtonVariant.outlined,
-                        onPressed: details.onStepCancel,
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: const _GlassOrderAppBar(title: 'New Laundry Order'),
+      body: Stack(
+        children: [
+          const Positioned.fill(child: _OrderScreenBackground()),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(28),
+                  topRight: Radius.circular(28),
+                ),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                  child: Container(
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.22),
+                      border: Border(
+                        top: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          width: 1,
+                        ),
                       ),
                     ),
-                  ],
-                ],
-              ),
-            );
-          },
-          steps: [
-            // ---- Step 1: Service ----
-            Step(
-              title: const Text('Select Service'),
-              subtitle: _selectedService != null ? Text(_selectedService!.name) : null,
-              isActive: _currentStep >= 0,
-              state: _currentStep > 0 ? StepState.complete : StepState.indexed,
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ServiceSelection(
-                    selected: _selectedService,
-                    onChanged: (service) {
-                      setState(() {
-                        _selectedService = service;
-                        _serviceError = null;
-                      });
-                    },
-                  ),
-                  if (_serviceError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(_serviceError!, style: TextStyle(color: colors.error)),
-                  ],
-                ],
-              ),
-            ),
-
-            // ---- Step 2: Laundry Items ----
-            Step(
-              title: const Text('Select Laundry Items'),
-              subtitle: _selectedItems.isNotEmpty
-                  ? Text('${_selectedItems.length} item(s) selected')
-                  : null,
-              isActive: _currentStep >= 1,
-              state: _currentStep > 1
-                  ? StepState.complete
-                  : (_currentStep == 1 ? StepState.indexed : StepState.disabled),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  LaundryItemSelection(
-                    selected: _selectedItems,
-                    onChanged: (items) {
-                      setState(() {
-                        _selectedItems
-                          ..clear()
-                          ..addAll(items);
-                        _itemsError = null;
-                      });
-                    },
-                  ),
-                  if (_itemsError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(_itemsError!, style: TextStyle(color: colors.error)),
-                  ],
-                ],
-              ),
-            ),
-
-            // ---- Step 3: Weight ----
-            Step(
-              title: const Text('Enter Weight'),
-              subtitle: _weightController.text.trim().isNotEmpty
-                  ? Text('${_weightController.text.trim()} kg')
-                  : null,
-              isActive: _currentStep >= 2,
-              state: _currentStep > 2
-                  ? StepState.complete
-                  : (_currentStep == 2 ? StepState.indexed : StepState.disabled),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  AppTextField(
-                    label: 'Weight (kg)',
-                    hint: 'e.g. 5.0',
-                    controller: _weightController,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    prefixIcon: Icons.scale_outlined,
-                    onChanged: (_) {
-                      // Always rebuild so the step subtitle stays in
-                      // sync as the customer types, clearing any
-                      // previous validation error along the way.
-                      setState(() => _weightError = null);
-                    },
-                  ),
-                  if (_weightError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(_weightError!, style: TextStyle(color: colors.error)),
-                  ],
-                ],
-              ),
-            ),
-
-            // ---- Step 4: Detergent ----
-            Step(
-              title: const Text('Select Detergent'),
-              subtitle:
-                  _selectedDetergent != null ? Text(_selectedDetergent!.name) : null,
-              isActive: _currentStep >= 3,
-              state: _currentStep > 3
-                  ? StepState.complete
-                  : (_currentStep == 3 ? StepState.indexed : StepState.disabled),
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  DetergentSelection(
-                    selected: _selectedDetergent,
-                    onChanged: (detergent) {
-                      setState(() {
-                        _selectedDetergent = detergent;
-                        _detergentError = null;
-                      });
-                    },
-                  ),
-                  if (_detergentError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(_detergentError!, style: TextStyle(color: colors.error)),
-                  ],
-                ],
-              ),
-            ),
-
-            // ---- Step 5: Pickup / Drop-off, Address & Location ----
-            Step(
-              title: const Text('Select Pickup/Drop-off'),
-              subtitle: _deliveryMethod != null
-                  ? Text(_deliveryMethod == DeliveryMethod.pickup ? 'Pickup' : 'Drop-off')
-                  : null,
-              isActive: _currentStep >= 4,
-              state: _currentStep == 4 ? StepState.indexed : StepState.disabled,
-              content: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SegmentedButton<DeliveryMethod>(
-                    segments: const [
-                      ButtonSegment(
-                        value: DeliveryMethod.pickup,
-                        label: Text('Pickup'),
-                        icon: Icon(Icons.delivery_dining_outlined),
-                      ),
-                      ButtonSegment(
-                        value: DeliveryMethod.dropoff,
-                        label: Text('Drop-off'),
-                        icon: Icon(Icons.storefront_outlined),
-                      ),
-                    ],
-                    selected: _deliveryMethod == null ? const {} : {_deliveryMethod!},
-                    emptySelectionAllowed: true,
-                    onSelectionChanged: (selection) {
-                      setState(() {
-                        _deliveryMethod = selection.isEmpty ? null : selection.first;
-                        _deliveryMethodError = null;
-                      });
-                    },
-                  ),
-                  if (_deliveryMethodError != null) ...[
-                    const SizedBox(height: 8),
-                    Text(_deliveryMethodError!, style: TextStyle(color: colors.error)),
-                  ],
-                  const SizedBox(height: 16),
-
-                  // Pickup fields — only shown when Pickup is chosen.
-                  if (_deliveryMethod == DeliveryMethod.pickup) ...[
-                    AppTextField(
-                      label: 'Address',
-                      hint: 'House/unit no., street, barangay',
-                      controller: _pickupAddressController,
-                      prefixIcon: Icons.home_outlined,
-                      maxLines: 2,
-                      onChanged: (_) => setState(() => _pickupAddressError = null),
-                    ),
-                    if (_pickupAddressError != null) ...[
-                      const SizedBox(height: 4),
-                      Text(_pickupAddressError!, style: TextStyle(color: colors.error)),
-                    ],
-                    const SizedBox(height: 12),
-                    AppTextField(
-                      label: 'Phone',
-                      hint: 'e.g. 0917 123 4567',
-                      controller: _pickupPhoneController,
-                      keyboardType: TextInputType.phone,
-                      prefixIcon: Icons.phone_outlined,
-                      onChanged: (_) => setState(() => _pickupPhoneError = null),
-                    ),
-                    if (_pickupPhoneError != null) ...[
-                      const SizedBox(height: 4),
-                      Text(_pickupPhoneError!, style: TextStyle(color: colors.error)),
-                    ],
-                    const SizedBox(height: 12),
-                    AppTextField(
-                      label: 'Landmark',
-                      hint: 'e.g. Near the barangay hall',
-                      controller: _pickupLandmarkController,
-                      prefixIcon: Icons.signpost_outlined,
-                      onChanged: (_) => setState(() => _pickupLandmarkError = null),
-                    ),
-                    if (_pickupLandmarkError != null) ...[
-                      const SizedBox(height: 4),
-                      Text(_pickupLandmarkError!, style: TextStyle(color: colors.error)),
-                    ],
-                    const SizedBox(height: 12),
-
-                    // PART 10.3 — real location-selection interface,
-                    // replacing the PART 10.2 plain text field.
-                    LocationSelection(
-                      selected: _selectedLocationArea,
-                      onChanged: (area) {
-                        setState(() {
-                          _selectedLocationArea = area;
-                          _pickupLocationError = null;
-                        });
+                    child: Stepper(
+                      type: StepperType.vertical,
+                      currentStep: _currentStep,
+                      onStepContinue: _handleStepContinue,
+                      onStepCancel: _handleStepCancel,
+                      onStepTapped: _handleStepTapped,
+                      controlsBuilder: (context, details) {
+                        final isFinalStep = details.stepIndex == _finalStepIndex;
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 16),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: AppButton(
+                                  label: isFinalStep ? 'Proceed' : 'Continue',
+                                  icon: isFinalStep ? Icons.check_circle_outline : null,
+                                  onPressed: details.onStepContinue,
+                                ),
+                              ),
+                              if (details.stepIndex > 0) ...[
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: AppButton(
+                                    label: 'Back',
+                                    variant: AppButtonVariant.outlined,
+                                    onPressed: details.onStepCancel,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        );
                       },
-                    ),
-                    if (_pickupLocationError != null) ...[
-                      const SizedBox(height: 4),
-                      Text(_pickupLocationError!, style: TextStyle(color: colors.error)),
-                    ],
-                  ],
+                      steps: [
+                        // ---- Step 1: Service ----
+                        // Content wrapped in its own frosted-glass card
+                        // (translucent + blurred) rather than sitting
+                        // directly on the outer sheet, so it reads as
+                        // a distinct glass panel over the background
+                        // blobs. See [ServiceSelection] for the actual
+                        // service tiles rendered inside.
+                        Step(
+                          title: const Text('Select Service'),
+                          subtitle: _selectedService != null
+                              ? Text(_selectedService!.name)
+                              : null,
+                          isActive: _currentStep >= 0,
+                          state: _currentStep > 0 ? StepState.complete : StepState.indexed,
+                          content: ClipRRect(
+                            borderRadius: BorderRadius.circular(16),
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withValues(alpha: 0.30),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.5),
+                                  ),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    ServiceSelection(
+                                      selected: _selectedService,
+                                      onChanged: (service) {
+                                        setState(() {
+                                          _selectedService = service;
+                                          _serviceError = null;
+                                        });
+                                      },
+                                    ),
+                                    if (_serviceError != null) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _serviceError!,
+                                        style: TextStyle(color: colors.error),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
 
-                  // Drop-off info — only shown when Drop-off is chosen.
-                  if (_deliveryMethod == DeliveryMethod.dropoff)
-                    const DropoffInfoCard(),
-                ],
+                        // ---- Step 2: Laundry Items ----
+                        Step(
+                          title: const Text('Select Laundry Items'),
+                          subtitle: _selectedItems.isNotEmpty
+                              ? Text('${_selectedItems.length} item(s) selected')
+                              : null,
+                          isActive: _currentStep >= 1,
+                          state: _currentStep > 1
+                              ? StepState.complete
+                              : (_currentStep == 1 ? StepState.indexed : StepState.disabled),
+                          content: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              LaundryItemSelection(
+                                selected: _selectedItems,
+                                onChanged: (items) {
+                                  setState(() {
+                                    _selectedItems
+                                      ..clear()
+                                      ..addAll(items);
+                                    _itemsError = null;
+                                  });
+                                },
+                              ),
+                              if (_itemsError != null) ...[
+                                const SizedBox(height: 8),
+                                Text(_itemsError!, style: TextStyle(color: colors.error)),
+                              ],
+                            ],
+                          ),
+                        ),
+
+                        // ---- Step 3: Weight ----
+                        Step(
+                          title: const Text('Enter Weight'),
+                          subtitle: _weightController.text.trim().isNotEmpty
+                              ? Text('${_weightController.text.trim()} kg')
+                              : null,
+                          isActive: _currentStep >= 2,
+                          state: _currentStep > 2
+                              ? StepState.complete
+                              : (_currentStep == 2 ? StepState.indexed : StepState.disabled),
+                          content: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              AppTextField(
+                                label: 'Weight (kg)',
+                                hint: 'e.g. 5.0',
+                                controller: _weightController,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(decimal: true),
+                                prefixIcon: Icons.scale_outlined,
+                                onChanged: (_) {
+                                  // Always rebuild so the step subtitle
+                                  // stays in sync as the customer types,
+                                  // clearing any previous validation
+                                  // error along the way.
+                                  setState(() => _weightError = null);
+                                },
+                              ),
+                              if (_weightError != null) ...[
+                                const SizedBox(height: 8),
+                                Text(_weightError!, style: TextStyle(color: colors.error)),
+                              ],
+                            ],
+                          ),
+                        ),
+
+                        // ---- Step 4: Detergent ----
+                        Step(
+                          title: const Text('Select Detergent'),
+                          subtitle: _selectedDetergent != null
+                              ? Text(_selectedDetergent!.name)
+                              : null,
+                          isActive: _currentStep >= 3,
+                          state: _currentStep > 3
+                              ? StepState.complete
+                              : (_currentStep == 3 ? StepState.indexed : StepState.disabled),
+                          content: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              DetergentSelection(
+                                selected: _selectedDetergent,
+                                onChanged: (detergent) {
+                                  setState(() {
+                                    _selectedDetergent = detergent;
+                                    _detergentError = null;
+                                  });
+                                },
+                              ),
+                              if (_detergentError != null) ...[
+                                const SizedBox(height: 8),
+                                Text(_detergentError!, style: TextStyle(color: colors.error)),
+                              ],
+                            ],
+                          ),
+                        ),
+
+                        // ---- Step 5: Pickup / Drop-off, Address & Location ----
+                        Step(
+                          title: const Text('Select Pickup/Drop-off'),
+                          subtitle: _deliveryMethod != null
+                              ? Text(_deliveryMethod == DeliveryMethod.pickup
+                                  ? 'Pickup'
+                                  : 'Drop-off')
+                              : null,
+                          isActive: _currentStep >= 4,
+                          state: _currentStep == 4 ? StepState.indexed : StepState.disabled,
+                          content: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SegmentedButton<DeliveryMethod>(
+                                segments: const [
+                                  ButtonSegment(
+                                    value: DeliveryMethod.pickup,
+                                    label: Text('Pickup'),
+                                    icon: Icon(Icons.delivery_dining_outlined),
+                                  ),
+                                  ButtonSegment(
+                                    value: DeliveryMethod.dropoff,
+                                    label: Text('Drop-off'),
+                                    icon: Icon(Icons.storefront_outlined),
+                                  ),
+                                ],
+                                selected:
+                                    _deliveryMethod == null ? const {} : {_deliveryMethod!},
+                                emptySelectionAllowed: true,
+                                onSelectionChanged: (selection) {
+                                  setState(() {
+                                    _deliveryMethod =
+                                        selection.isEmpty ? null : selection.first;
+                                    _deliveryMethodError = null;
+                                  });
+                                },
+                              ),
+                              if (_deliveryMethodError != null) ...[
+                                const SizedBox(height: 8),
+                                Text(_deliveryMethodError!,
+                                    style: TextStyle(color: colors.error)),
+                              ],
+                              const SizedBox(height: 16),
+
+                              // Pickup fields — only shown when Pickup is chosen.
+                              if (_deliveryMethod == DeliveryMethod.pickup) ...[
+                                AppTextField(
+                                  label: 'Address',
+                                  hint: 'House/unit no., street, barangay',
+                                  controller: _pickupAddressController,
+                                  prefixIcon: Icons.home_outlined,
+                                  maxLines: 2,
+                                  onChanged: (_) =>
+                                      setState(() => _pickupAddressError = null),
+                                ),
+                                if (_pickupAddressError != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(_pickupAddressError!,
+                                      style: TextStyle(color: colors.error)),
+                                ],
+                                const SizedBox(height: 12),
+                                AppTextField(
+                                  label: 'Phone',
+                                  hint: 'e.g. 0917 123 4567',
+                                  controller: _pickupPhoneController,
+                                  keyboardType: TextInputType.phone,
+                                  prefixIcon: Icons.phone_outlined,
+                                  onChanged: (_) =>
+                                      setState(() => _pickupPhoneError = null),
+                                ),
+                                if (_pickupPhoneError != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(_pickupPhoneError!,
+                                      style: TextStyle(color: colors.error)),
+                                ],
+                                const SizedBox(height: 12),
+                                AppTextField(
+                                  label: 'Landmark',
+                                  hint: 'e.g. Near the barangay hall',
+                                  controller: _pickupLandmarkController,
+                                  prefixIcon: Icons.signpost_outlined,
+                                  onChanged: (_) =>
+                                      setState(() => _pickupLandmarkError = null),
+                                ),
+                                if (_pickupLandmarkError != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(_pickupLandmarkError!,
+                                      style: TextStyle(color: colors.error)),
+                                ],
+                                const SizedBox(height: 12),
+
+                                // PART 10.3 — real location-selection
+                                // interface, replacing the PART 10.2
+                                // plain text field.
+                                LocationSelection(
+                                  selected: _selectedLocationArea,
+                                  onChanged: (area) {
+                                    setState(() {
+                                      _selectedLocationArea = area;
+                                      _pickupLocationError = null;
+                                    });
+                                  },
+                                ),
+                                if (_pickupLocationError != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(_pickupLocationError!,
+                                      style: TextStyle(color: colors.error)),
+                                ],
+                              ],
+
+                              // Drop-off info — only shown when Drop-off is chosen.
+                              if (_deliveryMethod == DeliveryMethod.dropoff)
+                                const DropoffInfoCard(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Frosted-glass app bar for the order form — same recipe as
+/// `_DashboardAppBar` in `user_dashboard.dart` (blurred translucent
+/// bar, rounded bottom corners, accent stripe), but with a back arrow
+/// in place of the dashboard's logout button, since this screen is
+/// pushed on top of the dashboard rather than being a bottom-nav tab.
+class _GlassOrderAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _GlassOrderAppBar({required this.title});
+
+  final String title;
+
+  static const double _contentHeight = 64;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(_contentHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(24),
+        bottomRight: Radius.circular(24),
+      ),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.18),
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(24),
+              bottomRight: Radius.circular(24),
+            ),
+            border: Border(
+              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.5), width: 1),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _kBrandBlue.withValues(alpha: 0.10),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: SizedBox(
+              height: _contentHeight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(6, 0, 18, 0),
+                child: Row(
+                  children: [
+                    _GlassBackButton(onPressed: () => Navigator.of(context).maybePop()),
+                    const SizedBox(width: 6),
+                    Container(
+                      width: 3,
+                      height: 18,
+                      margin: const EdgeInsets.only(right: 10),
+                      decoration: BoxDecoration(
+                        color: _kBrandBlue,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
+      ),
+    );
+  }
+}
+
+class _GlassBackButton extends StatelessWidget {
+  const _GlassBackButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(100),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.25),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            tooltip: 'Back',
+            icon: const Icon(Icons.arrow_back_rounded, color: Colors.black87, size: 19),
+            onPressed: onPressed,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Same blurred-blob backdrop as `_DashboardBackground` in
+/// `user_dashboard.dart`, trimmed to two blobs since this is a
+/// secondary screen sitting mostly behind a white content sheet
+/// rather than the dashboard's fully transparent tab content.
+class _OrderScreenBackground extends StatelessWidget {
+  const _OrderScreenBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xfff4f6fb),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: -90,
+            right: -70,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [_kBrandBlue, Color(0xffB3E5FC)],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 220,
+            left: -90,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _kBrandBlueLight.withValues(alpha: 0.4),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

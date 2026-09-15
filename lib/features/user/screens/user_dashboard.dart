@@ -13,6 +13,7 @@ import '../../../models/notification_model.dart';
 import '../../../models/service_model.dart';
 import '../../../models/user_model.dart';
 import 'profile_screen.dart';
+import 'explore_services_screen.dart';
 import 'laundry_order_screen.dart';
 import 'my_orders_screen.dart';
 import 'notifications_screen.dart';
@@ -85,6 +86,12 @@ class _UserDashboardState extends State<UserDashboard> {
           MaterialPageRoute(
             builder: (_) => LaundryOrderScreen(initialService: service),
           ),
+        ),
+        // "See all" next to "Our Services" — same pattern as
+        // onServiceTap above, pushes the full Explore Services list.
+        onSeeAllServices: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ExploreServicesScreen()),
         ),
         // Offers is tab index 2 in `tabs` / `tabTitles` below.
         onSeeAllOffers: () => setState(() => _navIndex = 2),
@@ -166,7 +173,7 @@ class _DashboardBackground extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          // Top-right blue/violet blob
+          // Top-right dark-blue-to-light-blue blob
           Positioned(
             top: -90,
             right: -70,
@@ -180,13 +187,13 @@ class _DashboardBackground extends StatelessWidget {
                   gradient: LinearGradient(
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
-                    colors: [Color(0xff5B8DEF), Color(0xffB98CF2)],
+                    colors: [Color(0xff0D47A1), Color(0xffB3E5FC)],
                   ),
                 ),
               ),
             ),
           ),
-          // Left-side violet blob, roughly mid-height
+          // Left-side dark-blue blob, roughly mid-height
           Positioned(
             top: 260,
             left: -90,
@@ -197,12 +204,12 @@ class _DashboardBackground extends StatelessWidget {
                 height: 220,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xffB98CF2).withValues(alpha: 0.55),
+                  color: const Color(0xff0D47A1).withValues(alpha: 0.55),
                 ),
               ),
             ),
           ),
-          // Bottom-right soft blue blob, sits behind the bottom nav
+          // Bottom-right light-blue blob, sits behind the bottom nav
           Positioned(
             bottom: -60,
             right: -50,
@@ -213,7 +220,7 @@ class _DashboardBackground extends StatelessWidget {
                 height: 240,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xff5B8DEF).withValues(alpha: 0.45),
+                  color: const Color(0xff8EC5FC).withValues(alpha: 0.45),
                 ),
               ),
             ),
@@ -578,6 +585,7 @@ class _HomeTab extends StatelessWidget {
     required this.userName,
     required this.userId,
     this.onServiceTap,
+    this.onSeeAllServices,
     this.onSeeAllOffers,
     this.onSeeAllOrders,
   });
@@ -592,6 +600,7 @@ class _HomeTab extends StatelessWidget {
   final String? userId;
 
   final ValueChanged<ServiceModel>? onServiceTap;
+  final VoidCallback? onSeeAllServices;
   final VoidCallback? onSeeAllOffers;
   final VoidCallback? onSeeAllOrders;
 
@@ -615,7 +624,10 @@ class _HomeTab extends StatelessWidget {
             onSeeAll: onSeeAllOrders,
           ),
         const SizedBox(height: 16),
-        ServiceSelectionCard(onServiceTap: onServiceTap),
+        ServiceSelectionCard(
+          onServiceTap: onServiceTap,
+          onSeeAll: onSeeAllServices,
+        ),
         const SizedBox(height: 20),
         CurrentOffersSection(onSeeAll: onSeeAllOffers),
       ],

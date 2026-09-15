@@ -277,18 +277,20 @@ class _StatusBadge extends StatelessWidget {
 
 /// A horizontal track with 4 dots (one per [_BarStage]) connected by
 /// a line. The portion of the line/dots up to and including the
-/// current stage is filled with a soft light-purple gradient; the
-/// rest stays a light neutral grey. Stage labels sit underneath each
-/// dot.
+/// current stage is filled with a dark-blue-to-light-blue gradient;
+/// the rest stays a light neutral grey. Stage labels sit underneath
+/// each dot.
 class _OrderProgressBar extends StatelessWidget {
   const _OrderProgressBar({required this.stage});
 
   final _BarStage stage;
 
-  // Soft light-purple used for the active portion of the progress
-  // line and its dots — matches the accent color used elsewhere in
-  // the app (e.g. the "Here's" text on the dashboard header).
-  static const Color _activeColor = Color(0xFFB9A8F0);
+  // Dark blue used for the active portion of the progress line and
+  // its dots — matches the accent color used elsewhere in the app
+  // (e.g. the "Here's" text on the dashboard header).
+  static const Color _activeColor = Color(0xFF0D47A1);
+  // Light blue used as the lighter end of the active line's gradient.
+  static const Color _activeColorLight = Color(0xFFB3E5FC);
 
   @override
   Widget build(BuildContext context) {
@@ -332,12 +334,9 @@ class _OrderProgressBar extends StatelessWidget {
                     width: usableWidth * fraction,
                     child: Container(
                       height: 3,
-                      decoration: BoxDecoration(
+                      decoration: const BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [
-                            activeColor,
-                            activeColor.withValues(alpha: 0.55),
-                          ],
+                          colors: [_activeColor, _activeColorLight],
                         ),
                       ),
                     ),

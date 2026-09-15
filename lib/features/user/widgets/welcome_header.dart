@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 ///
 /// Pure typography — no card, background, border, or shadow.
 /// Renders:
-///   "Hi {name}, " (bold, dark)  "Here's" (italic, light purple)
+///   "Hi {name}, " (bold, dark)  "Here's" (italic, dark blue)
 ///   "Our Laundry Services." (regular weight, dark)
 ///
 /// Display-only widget: takes the name, doesn't know where it came from.
@@ -13,8 +13,8 @@ class WelcomeHeader extends StatelessWidget {
 
   final String name;
 
-  // Soft light-purple accent used for the italic "Here's".
-  static const Color _accentPurple = Color(0xFFB9A8F0);
+  // Dark-blue accent used for the italic "Here's".
+  static const Color _accentBlue = Color(0xFF0D47A1);
   static const Color _dark = Color(0xFF1A1A1A);
 
   @override
@@ -53,7 +53,7 @@ class WelcomeHeader extends StatelessWidget {
                   style: TextStyle(
                     fontWeight: FontWeight.w700,
                     fontStyle: FontStyle.italic,
-                    color: _accentPurple,
+                    color: _accentBlue,
                   ),
                 ),
               ],
