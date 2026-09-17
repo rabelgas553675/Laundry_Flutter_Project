@@ -4,10 +4,14 @@ import 'package:flutter/material.dart';
 
 import '../../../app/routes.dart';
 import '../../../core/services/auth_state.dart';
+import '../../../core/utils/service_unit.dart';
+import '../../../core/widgets/app_card.dart';
+import '../../../core/widgets/empty_state.dart';
 import '../widgets/active_order_card.dart';
 import '../widgets/offer_card.dart';
 import '../widgets/service_selection_card.dart';
 import '../widgets/welcome_header.dart';
+import '../../../data/repositories/service_repository.dart';
 import '../../../data/services/notification_service.dart';
 import '../../../models/notification_model.dart';
 import '../../../models/service_model.dart';
@@ -801,7 +805,15 @@ class _UnreadNotificationsIcon extends StatelessWidget {
 
 /// The actual "Home" tab content — pulled out so build() above stays
 /// readable and IndexedStack can keep all five tabs alive.
-class _HomeTab extends StatelessWidget {
+///
+/// Stateful (rather than the original Stateless version) because it
+/// now owns the search bar: [_searchController]/[_query] drive a
+/// live, client-side filter over the active service catalog, shown in
+/// place of the usual Active Orders / Our Services / Offers content
+/// whenever there's a non-empty query — same "single fetched list,
+/// filtered locally" pattern [ExploreServicesScreen] and
+/// [ManageOrdersScreen] already use elsewhere in this app.
+class _HomeTab extends StatefulWidget {
   const _HomeTab({
     required this.userName,
     required this.userId,
@@ -826,32 +838,227 @@ class _HomeTab extends StatelessWidget {
   final VoidCallback? onSeeAllOrders;
 
   @override
+  State<_HomeTab> createState() => _HomeTabState();
+}
+
+class _HomeTabState extends State<_HomeTab> {
+  final ServiceRepository _repository = ServiceRepository();
+  final TextEditingController _searchController = TextEditingController();
+
+  String _query = '';
+  late Future<List<ServiceModel>> _servicesFuture = _loadServices();
+
+  Future<List<ServiceModel>> _loadServices() async {
+    await _repository.seedDefaultServicesIfEmpty();
+    return _repository.getActiveServices();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() => _query = value);
+  }
+
+  /// Matches on both service name and description, same fields
+  /// [ExploreServicesScreen]'s category-keyword matching and
+  /// [_filterBySearch] in `manage_promos_screen.dart` key off of —
+  /// so searching "delicate", for example, still finds Premium Wash
+  /// even though the word isn't in its name.
+  List<ServiceModel> _filterServices(List<ServiceModel> services, String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return services;
+    return services.where((s) {
+      return s.name.toLowerCase().contains(q) ||
+          s.description.toLowerCase().contains(q);
+    }).toList();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final isSearching = _query.trim().isNotEmpty;
+
     return ListView(
       padding: const EdgeInsets.only(bottom: 16),
       children: [
-        WelcomeHeader(name: userName),
-        const SizedBox(height: 10),
-        // PART 14+ — replaced the static `PlaceholderActiveOrder`
-        // sample with the real, live-streaming ActiveOrdersSection:
-        // it owns its own Firestore subscription
-        // (OrderRepository.streamOrdersForUser) and renders whichever
-        // orders are actually in progress for this user, instead of
-        // always showing the same hardcoded "Order #4782 — Picked"
-        // card regardless of what's really happening.
-        if (userId != null)
-          ActiveOrdersSection(
-            userId: userId!,
-            onSeeAll: onSeeAllOrders,
-          ),
-        const SizedBox(height: 16),
-        ServiceSelectionCard(
-          onServiceTap: onServiceTap,
-          onSeeAll: onSeeAllServices,
+        WelcomeHeader(
+          name: widget.userName,
+          controller: _searchController,
+          onChanged: _onSearchChanged,
         ),
-        const SizedBox(height: 20),
-        CurrentOffersSection(onSeeAll: onSeeAllOffers),
+        const SizedBox(height: 10),
+        if (isSearching)
+          _SearchResults(
+            servicesFuture: _servicesFuture,
+            query: _query,
+            filter: _filterServices,
+            onServiceTap: widget.onServiceTap,
+          )
+        else ...[
+          // PART 14+ — replaced the static `PlaceholderActiveOrder`
+          // sample with the real, live-streaming ActiveOrdersSection:
+          // it owns its own Firestore subscription
+          // (OrderRepository.streamOrdersForUser) and renders
+          // whichever orders are actually in progress for this user,
+          // instead of always showing the same hardcoded "Order #4782
+          // — Picked" card regardless of what's really happening.
+          if (widget.userId != null)
+            ActiveOrdersSection(
+              userId: widget.userId!,
+              onSeeAll: widget.onSeeAllOrders,
+            ),
+          const SizedBox(height: 16),
+          ServiceSelectionCard(
+            onServiceTap: widget.onServiceTap,
+            onSeeAll: widget.onSeeAllServices,
+          ),
+          const SizedBox(height: 20),
+          CurrentOffersSection(onSeeAll: widget.onSeeAllOffers),
+        ],
       ],
+    );
+  }
+}
+
+/// Live search results shown under the search bar once the admin/user
+/// has typed something — a plain vertical list rather than
+/// [ServiceSelectionCard]'s horizontal carousel, since search results
+/// read better top-to-bottom and can be any length.
+class _SearchResults extends StatelessWidget {
+  const _SearchResults({
+    required this.servicesFuture,
+    required this.query,
+    required this.filter,
+    this.onServiceTap,
+  });
+
+  final Future<List<ServiceModel>> servicesFuture;
+  final String query;
+  final List<ServiceModel> Function(List<ServiceModel>, String) filter;
+  final ValueChanged<ServiceModel>? onServiceTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<ServiceModel>>(
+      future: servicesFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 32),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: EmptyState(
+              title: 'Unable to search right now',
+              message: 'Please check your connection and try again.',
+              icon: Icons.wifi_off_rounded,
+            ),
+          );
+        }
+
+        final results = filter(snapshot.data ?? const <ServiceModel>[], query);
+
+        if (results.isEmpty) {
+          return EmptyState(
+            title: 'No services match "$query"',
+            message: 'Try a different name, e.g. "wash" or "dry cleaning".',
+            icon: Icons.search_off_rounded,
+          );
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '${results.length} result${results.length == 1 ? '' : 's'} for "$query"',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.black54,
+                      fontWeight: FontWeight.w600,
+                    ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            ...results.map(
+              (service) => _SearchResultTile(
+                service: service,
+                onTap: onServiceTap == null ? null : () => onServiceTap!(service),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SearchResultTile extends StatelessWidget {
+  const _SearchResultTile({required this.service, this.onTap});
+
+  final ServiceModel service;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final priceText =
+        '\$${service.pricePerKg.toStringAsFixed(2)} ${ServiceUnitFormat.perUnitPhrase(service.unit)}';
+
+    return AppCard(
+      onTap: onTap,
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.10),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.local_laundry_service_outlined,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  service.name,
+                  style: textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  service.description,
+                  style: textTheme.bodySmall?.copyWith(color: Colors.black54),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  priceText,
+                  style: textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xff9e1e77),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Icon(Icons.chevron_right_rounded, color: Colors.black38),
+        ],
+      ),
     );
   }
 }

@@ -94,6 +94,32 @@ class WelcomeHeader extends StatelessWidget {
                       ),
                     ),
                   ),
+                  // Clear ("x") button — only meaningful when this is a
+                  // real, writable search field (has a controller and
+                  // isn't just a read-only tap-to-open trigger), and only
+                  // shown once there's actually something to clear.
+                  if (controller != null && onTap == null)
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: controller!,
+                      builder: (context, value, _) {
+                        if (value.text.isEmpty) return const SizedBox.shrink();
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () {
+                            controller!.clear();
+                            onChanged?.call('');
+                          },
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 6),
+                            child: Icon(
+                              Icons.close_rounded,
+                              size: barHeight * 0.4,
+                              color: Colors.black45,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
                 ],
               ),
             ),

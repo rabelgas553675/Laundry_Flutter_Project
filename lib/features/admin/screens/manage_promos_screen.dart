@@ -133,7 +133,9 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
     final currentPromos = await _promosFuture;
     final updatedPromos = [promo, ...currentPromos];
     if (!mounted) return;
-    setState(() => _promosFuture = Future.value(updatedPromos));
+    setState(() {
+      _promosFuture = Future.value(updatedPromos);
+    });
   }
 
   Future<void> _openEditScreen(PromoModel promo) async {
