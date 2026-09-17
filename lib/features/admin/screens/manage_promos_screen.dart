@@ -1,5 +1,5 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_state.dart';
@@ -20,8 +20,8 @@ import 'edit_promo_screen.dart';
 ///
 /// Like [ManageServicesScreen] (PART 17), the promo catalog is small
 /// and rarely-changing, so this screen re-fetches once after every
-/// add/edit/toggle rather than holding a permanent Firestore listener
-/// open, via [PromoRepository.getAllPromos].
+/// add/edit/toggle rather than holding a permanent realtime
+/// subscription open, via [PromoRepository.getAllPromos].
 ///
 /// Reachable only through the `managePromos` route, which [RoleGuard]
 /// (PART 05) restricts to [UserRole.admin] — this screen does no role
@@ -30,7 +30,7 @@ class ManagePromosScreen extends StatefulWidget {
   const ManagePromosScreen({super.key, this.repository});
 
   /// Injectable for widget tests; defaults to a real
-  /// Firestore-backed [PromoRepository].
+  /// Supabase-backed [PromoRepository].
   final PromoRepository? repository;
 
   @override
@@ -76,8 +76,9 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
   Future<List<PromoModel>> _load() => _repository.getAllPromos(forceRefresh: true);
 
   Future<void> _refresh() async {
-    setState(() => _promosFuture = _load());
-    await _promosFuture;
+    final future = _load();
+    setState(() => _promosFuture = future);
+    await future;
   }
 
   /// Tab filter — client-side over the single fetched list, same
@@ -103,16 +104,36 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
   }
 
   Future<void> _openAddScreen() async {
-    final saved = await Navigator.push<bool>(
+    final createdPromo = await Navigator.push<PromoModel>(
       context,
       MaterialPageRoute(builder: (_) => AddPromoScreen(repository: _repository)),
     );
-    if (saved == true) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Promotion created.')));
-      await _refresh();
-    }
+    if (createdPromo == null) return;
+    if (!mounted) return;
+
+    // Splice the new promo straight into the list already backing
+    // the screen, rather than re-fetching from Supabase, so it shows
+    // up immediately — in whichever tab/search results it belongs to,
+    // since [_filterByTab]/[_filterBySearch] both recompute from
+    // [_promosFuture] on every build. No manual reload needed.
+    await _addPromoToList(createdPromo);
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Promotion created.')));
+  }
+
+  /// Inserts a freshly created promo at the front of the current list
+  /// and pushes that updated list back into [_promosFuture], so
+  /// [FutureBuilder] rebuilds with it on the next frame. The current
+  /// list is awaited first (it's already resolved and on-screen by
+  /// the time this runs, so this returns immediately) rather than
+  /// assumed, since [setState] must only ever assign a value
+  /// synchronously — never perform the async work itself.
+  Future<void> _addPromoToList(PromoModel promo) async {
+    final currentPromos = await _promosFuture;
+    final updatedPromos = [promo, ...currentPromos];
+    if (!mounted) return;
+    setState(() => _promosFuture = Future.value(updatedPromos));
   }
 
   Future<void> _openEditScreen(PromoModel promo) async {
@@ -153,10 +174,62 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
         ),
       );
       await _refresh();
-    } on FirebaseException catch (e) {
+    } on sb.PostgrestException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Unable to update this promotion.')),
+        SnackBar(content: Text(e.message.isNotEmpty ? e.message : 'Unable to update this promotion.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Something went wrong. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _togglingPromoId = null);
+    }
+  }
+
+  /// "Delete promotions" — a permanent, hard delete, distinct from
+  /// [_toggleStatus]'s deactivate. Confirms first since this can't be
+  /// undone (a deactivated promo can be reactivated; a deleted one
+  /// can't be recovered).
+  Future<void> _deletePromo(PromoModel promo) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete promotion?'),
+        content: Text(
+          'This will permanently delete "${promo.code}". This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    setState(() => _togglingPromoId = promo.id);
+    try {
+      await _repository.deletePromo(promo.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('${promo.code} has been deleted.')));
+      await _refresh();
+    } on sb.PostgrestException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message.isNotEmpty ? e.message : 'Unable to delete this promotion.')),
       );
     } catch (_) {
       if (!mounted) return;
@@ -258,6 +331,7 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
                               isUpdating: _togglingPromoId == promo.id,
                               onEdit: () => _openEditScreen(promo),
                               onToggleStatus: () => _toggleStatus(promo),
+                              onDelete: () => _deletePromo(promo),
                             );
                           },
                         ),

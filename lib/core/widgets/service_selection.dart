@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../data/repositories/service_repository.dart';
 import '../../models/service_model.dart';
+import '../utils/service_unit.dart';
 
 /// Same icon heuristic used by [ServiceSelectionCard] on the dashboard,
 /// kept in sync here so a service looks the same wherever it appears.
@@ -157,7 +158,7 @@ class _ServiceOptionTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '₱${service.pricePerKg.toStringAsFixed(0)}/kg · ${service.estimatedTime}',
+                    '${ServiceUnitFormat.formatPricePerUnit(service.unit, '₱${service.pricePerKg.toStringAsFixed(0)}')} · ${service.estimatedTime}',
                     style: textTheme.bodySmall?.copyWith(
                       color: colors.primary,
                       fontWeight: FontWeight.w600,

@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/utils/service_unit.dart';
 import '../../../data/repositories/service_repository.dart';
 import '../../../models/service_model.dart';
 
@@ -16,16 +17,26 @@ import '../../../models/service_model.dart';
 /// derived from the available layout width in `_ServiceSelectionCardState`
 /// so the carousel adapts across phone/tablet sizes instead of using a
 /// single fixed value.
-const double _kMinCardWidth = 150;
-const double _kMaxCardWidth = 210;
+///
+/// Bumped up from 150/210 for a slightly larger, easier-to-read card —
+/// still clamped so it never grows unreasonably wide on tablets.
+const double _kMinCardWidth = 170;
+const double _kMaxCardWidth = 235;
 
 /// Fraction of the available width a single card should target before
-/// being clamped to [_kMinCardWidth, _kMaxCardWidth]. Roughly shows
-/// 2-2.5 cards on a typical phone width with the next card peeking in.
-const double _kCardWidthFraction = 0.42;
+/// being clamped to [_kMinCardWidth, _kMaxCardWidth]. Nudged up from
+/// 0.42 to keep roughly the same "2-2.5 cards visible, next one
+/// peeking in" feel now that the card itself is a bit wider.
+const double _kCardWidthFraction = 0.46;
 
 /// Spacing between cards (must match the ListView's separatorBuilder).
 const double _kCardSpacing = 16;
+
+/// Height of the whole card carousel row. Increased from 220 to give
+/// the taller card (bigger photo + slightly more padding) room without
+/// clipping, while still comfortably fitting under "Our Services" on
+/// one screen alongside the rest of the dashboard.
+const double _kCardHeight = 248;
 
 /// Maps a service to its bundled asset image (see pubspec.yaml assets).
 /// Falls back to the standard-wash image if the name doesn't match a
@@ -53,11 +64,12 @@ String _priceAmount(ServiceModel service) {
   return '\$${service.pricePerKg.toStringAsFixed(2)}';
 }
 
-/// The plain-weight trailing part of the price string, e.g. "Per Kg".
-/// Per PART 08, prices always come from Firestore (ServiceModel.pricePerKg)
-/// — never hard-coded in the UI. Swap the unit text here if you need a
-/// different locale.
-const String _priceSuffix = ' Per Kg';
+/// The plain-weight trailing part of the price string, e.g. "Per Kg"
+/// / "Per Piece" — via the centralized [ServiceUnitFormat], never
+/// hard-coded. Bonus fix found while auditing Part 3's order/receipt
+/// screens: this card previously always showed "Per Kg", even for
+/// Dry Cleaning/Wash & Ironing (which are per-piece — see Part 1).
+String _priceSuffix(ServiceModel service) => ' ${ServiceUnitFormat.perUnitPhrase(service.unit)}';
 
 /// Compact ETA badge text, e.g. "ETA 2hrs" or "ETA 3days". Empty when
 /// estimatedTime is unset, so the badge simply won't render (see
@@ -238,7 +250,7 @@ class _ServiceSelectionCardState extends State<ServiceSelectionCard> {
               ),
               const SizedBox(height: 16),
               SizedBox(
-                height: 220,
+                height: _kCardHeight,
                 child: FutureBuilder<List<ServiceModel>>(
                   future: _servicesFuture,
                   builder: (context, snapshot) {
@@ -469,7 +481,7 @@ class _ServiceListItem extends StatelessWidget {
           filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
           child: Container(
             width: width,
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
@@ -588,7 +600,7 @@ class _ServiceListItem extends StatelessWidget {
                                   children: [
                                     TextSpan(text: _priceAmount(service)),
                                     TextSpan(
-                                      text: _priceSuffix,
+                                      text: _priceSuffix(service),
                                       style: textTheme.bodySmall?.copyWith(
                                         fontWeight: FontWeight.normal,
                                         color: Colors.black54,

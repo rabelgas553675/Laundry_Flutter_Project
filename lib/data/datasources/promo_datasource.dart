@@ -80,11 +80,29 @@ class PromoDatasource {
     return snapshot.docs.any((doc) => doc.id != excludeId);
   }
 
+  /// A fresh, unused promo id, generated locally without writing
+  /// anything to Firestore yet.
+  ///
+  /// PART 19 — lets a caller (namely [AddPromoScreen]) upload a
+  /// promo's photo to a Supabase Storage path keyed by this id
+  /// *before* the promo document itself exists, so the document's
+  /// very first write already carries the right `imageUrl` instead of
+  /// a create-then-patch two-step.
+  String newPromoId() => _promosRef.doc().id;
+
   /// PART 18B — "Create promotions."
-  Future<void> createPromo(PromoModel promo) {
-    return _promosRef
-        .add(promo.toMapForCreate())
+  ///
+  /// Writes to [promo.id] when the caller already assigned one (see
+  /// [newPromoId]); otherwise falls back to a fresh Firestore auto-id,
+  /// same as the old `.add(...)` behavior. Either way, returns the id
+  /// the document was actually written under.
+  Future<String> createPromo(PromoModel promo) async {
+    final id = promo.id.isNotEmpty ? promo.id : _promosRef.doc().id;
+    await _promosRef
+        .doc(id)
+        .set(promo.toMapForCreate())
         .timeout(_timeout, onTimeout: () => throw _timeoutException('saving the promotion'));
+    return id;
   }
 
   /// PART 18B — Admin edits (code, discount type/value, minimum
@@ -94,5 +112,16 @@ class PromoDatasource {
         .doc(id)
         .update(fields)
         .timeout(_timeout, onTimeout: () => throw _timeoutException('saving the promotion'));
+  }
+
+  /// PART 18B — "Delete promotions." A hard delete, distinct from
+  /// deactivating (see [updatePromoFields] with a [PromoStatus]
+  /// change) — the document is removed from Firestore entirely and
+  /// can no longer be found, edited, or reactivated.
+  Future<void> deletePromo(String id) {
+    return _promosRef
+        .doc(id)
+        .delete()
+        .timeout(_timeout, onTimeout: () => throw _timeoutException('deleting the promotion'));
   }
 }

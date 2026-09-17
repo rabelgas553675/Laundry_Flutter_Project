@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../data/repositories/service_repository.dart';
@@ -48,6 +49,13 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
       TextEditingController(text: widget.existing?.estimatedTime ?? '');
 
   late ServiceStatus _status = widget.existing?.status ?? ServiceStatus.active;
+
+  /// Defaults to kilogram for "Add service" — matches
+  /// `ServiceModel.unit`'s own default, so a brand-new service that
+  /// never touches this control still ends up kg-based, same as
+  /// before this feature existed.
+  late ServiceUnit _unit = widget.existing?.unit ?? ServiceUnit.kilogram;
+
   bool _isSaving = false;
   String? _errorMessage;
 
@@ -69,7 +77,8 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
 
   String? _validatePrice(String? value) {
     final trimmed = value?.trim() ?? '';
-    if (trimmed.isEmpty) return 'Price per kg is required.';
+    final unitNoun = _unit.isPiece ? 'piece' : 'kg';
+    if (trimmed.isEmpty) return 'Price per $unitNoun is required.';
     final parsed = double.tryParse(trimmed);
     if (parsed == null) return 'Enter a valid number.';
     if (parsed <= 0) return 'Price must be greater than zero.';
@@ -97,6 +106,7 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
           pricePerKg: pricePerKg,
           estimatedTime: estimatedTime,
           status: _status,
+          unit: _unit,
         );
         await _repository.updateService(updated);
       } else {
@@ -107,6 +117,7 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
           pricePerKg: pricePerKg,
           estimatedTime: estimatedTime,
           status: _status,
+          unit: _unit,
         ));
       }
       if (!mounted) return;
@@ -151,8 +162,47 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
                 textInputAction: TextInputAction.next,
               ),
               const SizedBox(height: 12),
+              // Priced by kg vs. per piece (Part 1 of the per-piece
+              // pricing feature). Changing this only relabels the
+              // price field below and changes what gets persisted as
+              // `ServiceModel.unit` — it does not touch `pricePerKg`
+              // itself, so switching units doesn't silently change
+              // the number the admin already typed in.
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Priced By',
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+              ),
+              const SizedBox(height: 6),
+              SegmentedButton<ServiceUnit>(
+                segments: const [
+                  ButtonSegment(
+                    value: ServiceUnit.kilogram,
+                    label: Text('Per Kg'),
+                    icon: Icon(Icons.scale_outlined),
+                  ),
+                  ButtonSegment(
+                    value: ServiceUnit.piece,
+                    label: Text('Per Piece'),
+                    icon: Icon(Icons.checkroom_outlined),
+                  ),
+                ],
+                selected: {_unit},
+                onSelectionChanged: _isSaving
+                    ? null
+                    : (selection) {
+                        setState(() => _unit = selection.first);
+                        // Re-validate the price field immediately so
+                        // a stale "per kg"/"per piece" error message
+                        // never lingers after switching units.
+                        _formKey.currentState?.validate();
+                      },
+              ),
+              const SizedBox(height: 12),
               AppTextField(
-                label: 'Price per kg (₱)',
+                label: ServiceUnitFormat.priceFieldLabel(_unit),
                 controller: _priceController,
                 enabled: !_isSaving,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),

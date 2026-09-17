@@ -2,7 +2,9 @@ import '../../core/utils/price_calculator.dart';
 import '../../models/order_draft_model.dart';
 import '../../models/order_item_model.dart';
 import '../../models/order_model.dart';
+import '../../models/promo_model.dart';
 import '../datasources/order_datasource.dart';
+import 'promo_repository.dart';
 
 /// PART 12.3 — sits between the app (PART 12.4's Order Summary
 /// screen) and [OrderDatasource]'s raw Firestore calls. Same split as
@@ -11,9 +13,68 @@ import '../datasources/order_datasource.dart';
 /// pricing, order-number generation, defaulting `status` to pending —
 /// while [OrderDatasource] stays a dumb read/write layer.
 class OrderRepository {
-  OrderRepository({OrderDatasource? datasource}) : _datasource = datasource ?? OrderDatasource();
+  OrderRepository({OrderDatasource? datasource, PromoRepository? promoRepository})
+      : _datasource = datasource ?? OrderDatasource(),
+        _promoRepository = promoRepository ?? PromoRepository();
 
   final OrderDatasource _datasource;
+
+  /// PART 3 — used by [createOrder] to re-check a draft's
+  /// [OrderDraft.appliedPromo] one last time, right before the order
+  /// is actually written to Firestore. See [_resolvePromo] below.
+  final PromoRepository _promoRepository;
+
+  /// PART 3 — the authoritative, last-moment check of whether
+  /// [draft]'s selected promo (if any) is still usable, run
+  /// immediately before persisting the order.
+  ///
+  /// [OrderSummaryScreen] already re-validates the same promo when it
+  /// loads and again just before submitting, so in the normal case
+  /// this simply confirms what the customer already saw. It exists
+  /// as its own defense-in-depth check here — not just trusting
+  /// whatever `draft.appliedPromo`/`draft.resolvedDiscount` say —
+  /// because a promo can be deactivated, deleted, or expire in the
+  /// gap between the customer opening Order Summary and actually
+  /// tapping Confirm, and an order must never be saved with a
+  /// discount that no longer corresponds to a real, currently-valid
+  /// promo.
+  ///
+  /// Never throws: if the promo turns out to be invalid (or the
+  /// check itself fails, e.g. offline), the order is still placed —
+  /// just without that discount — rather than blocking checkout
+  /// entirely. Returns the resolved `(discount, promoCode,
+  /// promoDiscountLabel)` to actually persist.
+  Future<(double discount, String? promoCode, String? promoLabel)> _resolvePromo(
+    OrderDraft draft,
+  ) async {
+    final applied = draft.appliedPromo;
+    if (applied == null) {
+      return (draft.discount, null, null);
+    }
+
+    PromoModel? current;
+    try {
+      final result = await _promoRepository.validateCode(
+        code: applied.code,
+        orderSubtotal: draft.baseSubtotal,
+      );
+      if (!result.isValid) {
+        // No longer valid (expired/disabled/deleted/below minimum
+        // since it was selected) — drop it rather than persist a
+        // stale discount.
+        return (0.0, null, null);
+      }
+      current = result.promo;
+    } catch (_) {
+      // Couldn't re-check (e.g. offline) — fall back to the
+      // already-computed snapshot on the draft rather than failing
+      // the whole order over a connectivity blip.
+      return (draft.resolvedDiscount, applied.code, applied.discountLabel);
+    }
+
+    final promo = current ?? applied;
+    return (promo.discountFor(draft.baseSubtotal), promo.code, promo.discountLabel);
+  }
 
   /// Safety ceiling for [_generateUniqueOrderNumber] — see that
   /// method's doc comment. 9999 also happens to be the largest value
@@ -87,6 +148,16 @@ class OrderRepository {
   ///    from the UI, so the persisted amount is always exactly what
   ///    the calculator says for these inputs, never something a
   ///    caller could pass in stale or tampered.
+  ///
+  ///    PART 3 fix: an itemized [draft] (Dry Cleaning) always has
+  ///    `weightKg == 0` — it isn't priced by weight at all — so this
+  ///    now passes [OrderDraft.itemsSubtotal] (Σ quantity × item
+  ///    price across [OrderDraft.selectedItems]) through as
+  ///    [PriceCalculator.calculate]'s `itemsSubtotal` for those
+  ///    drafts. Previously this always priced by
+  ///    `servicePricePerKg × weightKg`, which silently produced a
+  ///    ₱0 subtotal — and therefore a ₱0 total — for every Dry
+  ///    Cleaning order.
   /// 4. Defaults `status` to [OrderStatus.pending].
   /// 5–6. Leaves `createdAt`/`updatedAt` unset (null) on the
   ///    [OrderModel] it builds, rather than stamping `DateTime.now()`
@@ -107,12 +178,19 @@ class OrderRepository {
     required OrderDraft draft,
     required String userId,
   }) async {
+    // PART 3 — resolve the applied promo (if any) one last time
+    // against Firestore before pricing/persisting this order. See
+    // [_resolvePromo]'s doc comment for why this can't just trust
+    // `draft.resolvedDiscount` blindly.
+    final (discount, promoCode, promoLabel) = await _resolvePromo(draft);
+
     final breakdown = PriceCalculator.calculate(
       servicePricePerKg: draft.service.pricePerKg,
       weightKg: draft.weightKg,
+      itemsSubtotal: draft.isItemized ? draft.itemsSubtotal : null,
       detergentFee: draft.detergent.additionalPrice,
       pickupFee: draft.pickupFee,
-      discount: draft.discount,
+      discount: discount,
     );
 
     final orderNumber = await _generateUniqueOrderNumber();
@@ -123,19 +201,41 @@ class OrderRepository {
       serviceId: draft.service.id,
       serviceName: draft.service.name,
       weight: draft.weightKg,
+      // Part 1 — captured at creation time so this order keeps
+      // displaying/calculating under the unit it was actually placed
+      // with, even if this service's configured unit changes later.
+      // See the doc comment on `OrderModel.serviceUnit`.
+      serviceUnit: draft.service.unit,
       detergentId: draft.detergent.id,
       detergentName: draft.detergent.name,
-      items: draft.items.map(OrderItemModel.fromLaundryItem).toList(),
+      // PART 3 fix: an itemized draft's priced garment lines live on
+      // `draft.selectedItems` (already `OrderItemModel`s, each with
+      // its own `quantity`/`unitPrice`) — `draft.items` stays empty
+      // for these (see `OrderDraft.items`'s doc comment), so mapping
+      // it here would silently persist an order with no line items
+      // at all. Every other service keeps mapping its unpriced
+      // `LaundryItemModel` category tags exactly as before.
+      items: draft.isItemized
+          ? draft.selectedItems
+          : draft.items.map(OrderItemModel.fromLaundryItem).toList(),
       method: draft.deliveryMethod,
       address: draft.pickupAddress,
       location: draft.pickupLocation?.label,
       pickupPhone: draft.pickupPhone,
       pickupLandmark: draft.pickupLandmark,
+      // PART 3 fix — previously dropped entirely; see the doc
+      // comment on `OrderModel.specialInstructions`.
+      specialInstructions: draft.specialInstructions,
       subtotal: breakdown.subtotal,
       detergentFee: breakdown.detergentFee,
       pickupFee: breakdown.pickupFee,
       discount: breakdown.discount,
       total: breakdown.total,
+      // PART 3 — snapshot of which promo (if any) actually produced
+      // `breakdown.discount` above, so the order keeps showing "Promo:
+      // 20% OFF" forever, independent of that promo's later fate.
+      promoCode: promoCode,
+      promoDiscountLabel: promoLabel,
       status: OrderStatus.pending,
       // Intentionally null — see step 5–6 above.
       createdAt: null,

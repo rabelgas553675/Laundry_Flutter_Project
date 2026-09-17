@@ -53,12 +53,19 @@ dependencies:
   # proof-of-delivery images) from the gallery or camera.
   image_picker: ^1.1.2
 
-  # Supabase Storage — used ONLY for profile photo storage
-  # (lib/core/services/file_service.dart). Firebase Storage now
-  # requires the paid Blaze plan even at $0 usage (policy change,
-  # Feb 2026), so profile images live in Supabase's free tier
-  # instead. Firebase Auth/Firestore are unaffected.
+  # Supabase — Storage (lib/core/services/file_service.dart) for
+  # profile AND promo photos, since Firebase Storage now requires the
+  # paid Blaze plan even at $0 usage (policy change, Feb 2026); PLUS
+  # Supabase Database (Postgres, via PostgREST) for the `promos` table
+  # itself (lib/data/datasources/promo_datasource.dart), per PART 20.
+  # Firebase Auth/Firestore back every other collection unaffected.
   supabase_flutter: ^2.8.0
+
+  # Client-side id generation for new promo rows (PART 20) — a promo's
+  # id is needed up front, before the row is created, so its photo can
+  # be uploaded to a Storage path keyed by that id in the same step
+  # (see PromoDatasource.newPromoId). Pure-Dart, no native dependency.
+  uuid: ^4.5.1
 
   # PART 19B — PDF generation and printing/export for Admin reports
   # and order receipts. `pdf` builds the document (pure Dart, no
@@ -108,6 +115,7 @@ flutter:
   assets:
     - assets/images/laundry_hero.jpg
     - assets/images/quick_wash.png
+    - assets/images/logo.png
     - assets/images/standard_wash.png
     - assets/images/premium_wash.png
     - assets/images/dry_cleaning.jpg

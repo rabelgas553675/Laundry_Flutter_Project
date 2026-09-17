@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/utils/service_unit.dart';
 import '../features/user/screens/laundry_order_screen.dart' show DeliveryMethod;
 import 'order_item_model.dart';
 
@@ -90,7 +91,32 @@ class OrderModel {
   final String serviceName;
 
   /// Weight in kilograms, entered on the PART 10.1 order form.
+  ///
+  /// Kept as `weight` (not renamed) for the same reason
+  /// `ServiceModel.pricePerKg` wasn't renamed: every existing call
+  /// site — `PriceCalculator`, `pdf_service.dart`, PART 13/16's order
+  /// screens — keeps reading this field unchanged. For a per-piece
+  /// order (Part 2 onward) this holds the piece count instead of a
+  /// weight; what it actually means is given by [serviceUnit], never
+  /// by re-deriving it from [serviceName].
   final double weight;
+
+  /// Part 1 (per-piece pricing) — the unit [weight] was priced under
+  /// *at the moment this order was created*, captured here so a
+  /// historical order keeps displaying correctly (e.g. `"3 pcs"`)
+  /// even if an admin later changes that service's configured unit,
+  /// renames it, or deactivates it. Order screens/receipts must
+  /// always read this field instead of looking up the service's
+  /// *current* unit from [ServiceRepository].
+  ///
+  /// This is deliberately the only model change Part 1 makes to
+  /// [OrderModel] — actually setting a real piece quantity/validating
+  /// it/rendering it as `"pcs"` throughout the ordering flow is Part
+  /// 2's scope. For now, [OrderRepository.createOrder] simply copies
+  /// the selected service's current [ServiceModel.unit] onto the
+  /// order at creation time, exactly like it already does for
+  /// [serviceName].
+  final ServiceUnit serviceUnit;
 
   final String detergentId;
 
@@ -123,11 +149,46 @@ class OrderModel {
   final String? pickupPhone;
   final String? pickupLandmark;
 
+  /// PART 3 fix — the customer's optional free-text note
+  /// (`OrderDraft.specialInstructions`, e.g. "Handle carefully")
+  /// was collected on the PART 10.2 form but never actually made it
+  /// onto a persisted order: this field didn't exist, so
+  /// `OrderRepository.createOrder` had nowhere to put it and it was
+  /// silently discarded. Both this screen's Order Details and the
+  /// admin's order view need to show it (per this part's spec), so
+  /// it's added here, in [toMap]/[fromMap]/[toJson]/[fromJson], and
+  /// wired through by `OrderRepository.createOrder`. `null`/empty for
+  /// every order placed before this fix, and for any order where the
+  /// customer left it blank.
+  final String? specialInstructions;
+
   final double subtotal;
   final double detergentFee;
   final double pickupFee;
   final double discount;
   final double total;
+
+  /// PART 3 — the promo code applied to this order (e.g. "WELCOME20"),
+  /// if the customer selected/redeemed one on the Offers screen before
+  /// checking out. `null` for an order placed without any promo.
+  ///
+  /// This is captured as a plain string snapshot, not a live reference
+  /// to a `promos/{id}` document: a historical order must keep showing
+  /// exactly what code was used and how much it took off ([discount])
+  /// even if that promo is later edited, deactivated, or deleted by an
+  /// admin. [discount] itself is always the authoritative amount that
+  /// was actually taken off this order's [subtotal] — [promoCode] is
+  /// purely a label for "why", never re-derived to recompute pricing.
+  final String? promoCode;
+
+  /// Human-readable summary of what [promoCode] was worth at the time
+  /// this order was placed (e.g. "20% off" or "₱50 off") — see
+  /// `PromoModel.discountLabel`. Stored alongside [promoCode] for the
+  /// same reason: so "Promo: 20% OFF" keeps displaying correctly on
+  /// this order forever, even if the promo's own discount value is
+  /// changed or the promo is deleted later. `null` when [promoCode]
+  /// is `null`.
+  final String? promoDiscountLabel;
 
   final OrderStatus status;
 
@@ -141,6 +202,7 @@ class OrderModel {
     required this.serviceId,
     required this.serviceName,
     required this.weight,
+    this.serviceUnit = ServiceUnit.kilogram,
     required this.detergentId,
     this.detergentName = '',
     this.items = const [],
@@ -149,17 +211,36 @@ class OrderModel {
     this.location,
     this.pickupPhone,
     this.pickupLandmark,
+    this.specialInstructions,
     required this.subtotal,
     this.detergentFee = 0,
     this.pickupFee = 0,
     this.discount = 0,
     required this.total,
+    this.promoCode,
+    this.promoDiscountLabel,
     this.status = OrderStatus.pending,
     this.createdAt,
     this.updatedAt,
   });
 
   bool get isPickup => method == DeliveryMethod.pickup;
+
+  /// PART 3 — whether this order was priced per line (Dry Cleaning-
+  /// style: `2 × Suit = ₱300`, summed across [items]) rather than by
+  /// weight/piece-count against a single `pricePerKg`.
+  ///
+  /// True when at least one persisted [OrderItemModel] line carries
+  /// its own [OrderItemModel.unitPrice] — exactly what
+  /// `OrderRepository.createOrder` writes into [items] for a
+  /// `ServiceType.isItemized` service (see `OrderDraft.isItemized`/
+  /// `OrderDraft.selectedItems`), and never writes for a weight-based
+  /// one (those items are plain, unpriced `LaundryItemModel` tags
+  /// with `unitPrice == 0`). Computed from the persisted data itself
+  /// — not from [serviceName] or a separately-stored flag — so it
+  /// works for every historical order without a migration, and can
+  /// never drift out of sync with what was actually charged.
+  bool get isItemized => items.any((item) => item.unitPrice > 0);
 
   /// Reads a single date field that may arrive as any of:
   /// - a Firestore [Timestamp] (normal case, reading from Firestore),
@@ -190,6 +271,7 @@ class OrderModel {
       'serviceId': serviceId,
       'serviceName': serviceName,
       'weight': weight,
+      'serviceUnit': serviceUnit.value,
       'detergentId': detergentId,
       'detergentName': detergentName,
       'items': OrderItemModel.listToMap(items),
@@ -198,11 +280,14 @@ class OrderModel {
       'location': location,
       'pickupPhone': pickupPhone,
       'pickupLandmark': pickupLandmark,
+      'specialInstructions': specialInstructions,
       'subtotal': subtotal,
       'detergentFee': detergentFee,
       'pickupFee': pickupFee,
       'discount': discount,
       'total': total,
+      'promoCode': promoCode,
+      'promoDiscountLabel': promoDiscountLabel,
       'status': status.value,
       'createdAt': createdAt != null ? Timestamp.fromDate(createdAt!) : FieldValue.serverTimestamp(),
       'updatedAt': updatedAt != null ? Timestamp.fromDate(updatedAt!) : FieldValue.serverTimestamp(),
@@ -214,13 +299,19 @@ class OrderModel {
   /// because a raw Firestore map never contains its own document ID —
   /// see [OrderModel.fromFirestore], which supplies it automatically.
   factory OrderModel.fromMap(Map<String, dynamic> map, {String? id}) {
+    final serviceName = map['serviceName'] as String? ?? '';
     return OrderModel(
       id: id,
       orderNumber: map['orderNumber'] as String? ?? '',
       userId: map['userId'] as String? ?? '',
       serviceId: map['serviceId'] as String? ?? '',
-      serviceName: map['serviceName'] as String? ?? '',
+      serviceName: serviceName,
       weight: (map['weight'] as num?)?.toDouble() ?? 0,
+      // Backwards-compatible, same as `ServiceModel.fromFirestore`:
+      // orders written before this field existed fall back to
+      // inferring the unit from `serviceName` rather than silently
+      // becoming kilogram-based.
+      serviceUnit: ServiceUnitParsing.resolve(map['serviceUnit'] as String?, serviceName),
       detergentId: map['detergentId'] as String? ?? '',
       detergentName: map['detergentName'] as String? ?? '',
       items: OrderItemModel.listFromMap(map['items'] as List<dynamic>?),
@@ -229,11 +320,14 @@ class OrderModel {
       location: map['location'] as String?,
       pickupPhone: map['pickupPhone'] as String?,
       pickupLandmark: map['pickupLandmark'] as String?,
+      specialInstructions: map['specialInstructions'] as String?,
       subtotal: (map['subtotal'] as num?)?.toDouble() ?? 0,
       detergentFee: (map['detergentFee'] as num?)?.toDouble() ?? 0,
       pickupFee: (map['pickupFee'] as num?)?.toDouble() ?? 0,
       discount: (map['discount'] as num?)?.toDouble() ?? 0,
       total: (map['total'] as num?)?.toDouble() ?? 0,
+      promoCode: map['promoCode'] as String?,
+      promoDiscountLabel: map['promoDiscountLabel'] as String?,
       status: OrderStatusX.fromValue(map['status'] as String?),
       createdAt: _parseDate(map['createdAt']),
       updatedAt: _parseDate(map['updatedAt']),
@@ -262,6 +356,7 @@ class OrderModel {
       'serviceId': serviceId,
       'serviceName': serviceName,
       'weight': weight,
+      'serviceUnit': serviceUnit.value,
       'detergentId': detergentId,
       'detergentName': detergentName,
       'items': OrderItemModel.listToMap(items),
@@ -270,11 +365,14 @@ class OrderModel {
       'location': location,
       'pickupPhone': pickupPhone,
       'pickupLandmark': pickupLandmark,
+      'specialInstructions': specialInstructions,
       'subtotal': subtotal,
       'detergentFee': detergentFee,
       'pickupFee': pickupFee,
       'discount': discount,
       'total': total,
+      'promoCode': promoCode,
+      'promoDiscountLabel': promoDiscountLabel,
       'status': status.value,
       'createdAt': createdAt?.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
@@ -282,13 +380,15 @@ class OrderModel {
   }
 
   factory OrderModel.fromJson(Map<String, dynamic> json) {
+    final serviceName = json['serviceName'] as String? ?? '';
     return OrderModel(
       id: json['id'] as String?,
       orderNumber: json['orderNumber'] as String? ?? '',
       userId: json['userId'] as String? ?? '',
       serviceId: json['serviceId'] as String? ?? '',
-      serviceName: json['serviceName'] as String? ?? '',
+      serviceName: serviceName,
       weight: (json['weight'] as num?)?.toDouble() ?? 0,
+      serviceUnit: ServiceUnitParsing.resolve(json['serviceUnit'] as String?, serviceName),
       detergentId: json['detergentId'] as String? ?? '',
       detergentName: json['detergentName'] as String? ?? '',
       items: OrderItemModel.listFromMap(json['items'] as List<dynamic>?),
@@ -297,11 +397,14 @@ class OrderModel {
       location: json['location'] as String?,
       pickupPhone: json['pickupPhone'] as String?,
       pickupLandmark: json['pickupLandmark'] as String?,
+      specialInstructions: json['specialInstructions'] as String?,
       subtotal: (json['subtotal'] as num?)?.toDouble() ?? 0,
       detergentFee: (json['detergentFee'] as num?)?.toDouble() ?? 0,
       pickupFee: (json['pickupFee'] as num?)?.toDouble() ?? 0,
       discount: (json['discount'] as num?)?.toDouble() ?? 0,
       total: (json['total'] as num?)?.toDouble() ?? 0,
+      promoCode: json['promoCode'] as String?,
+      promoDiscountLabel: json['promoDiscountLabel'] as String?,
       status: OrderStatusX.fromValue(json['status'] as String?),
       createdAt: _parseDate(json['createdAt']),
       updatedAt: _parseDate(json['updatedAt']),
@@ -326,6 +429,7 @@ class OrderModel {
       serviceId: serviceId,
       serviceName: serviceName,
       weight: weight,
+      serviceUnit: serviceUnit,
       detergentId: detergentId,
       detergentName: detergentName,
       items: items,
@@ -334,11 +438,14 @@ class OrderModel {
       location: location,
       pickupPhone: pickupPhone,
       pickupLandmark: pickupLandmark,
+      specialInstructions: specialInstructions,
       subtotal: subtotal,
       detergentFee: detergentFee,
       pickupFee: pickupFee,
       discount: discount,
       total: total,
+      promoCode: promoCode,
+      promoDiscountLabel: promoDiscountLabel,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,

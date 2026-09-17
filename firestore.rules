@@ -22,7 +22,17 @@ service cloud.firestore {
       allow read: if isOwner(userId) || isAdmin();
       allow create: if isOwner(userId) &&
         request.resource.data.role == 'user';
-      allow update: if isOwner(userId) || isAdmin();
+
+      // SECURITY FIX — the previous rule (`isOwner(userId) || isAdmin()`)
+      // let any signed-in user promote themselves to admin by writing
+      // `role: 'admin'` to their own document (isOwner() only checks who
+      // owns the doc, not what fields are being changed). An admin may
+      // still change anyone's role; a non-admin owner may update their
+      // own document but may NOT change `role` — it must stay whatever
+      // it already was.
+      allow update: if isAdmin() ||
+        (isOwner(userId) && request.resource.data.role == resource.data.role);
+
       allow delete: if isAdmin();
     }
 
@@ -30,6 +40,19 @@ service cloud.firestore {
     match /services/{serviceId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isAdmin();
+
+      // ---------- services/{serviceId}/items/{itemId} ----------
+      // Per-garment catalog for itemized services (Dry Cleaning,
+      // Wash & Ironing) — read by ServiceItemDatasource.getActiveItems,
+      // seeded/edited by ServiceItemRepository. Subcollections do NOT
+      // inherit the parent match block above, so without this nested
+      // rule every read/write here falls through to Firestore's
+      // default-deny and fails with permission-denied — for admins
+      // and regular customers alike.
+      match /items/{itemId} {
+        allow read: if isSignedIn();
+        allow create, update, delete: if isAdmin();
+      }
     }
 
     // ---------- laundryItems/{itemId} ----------
@@ -48,21 +71,52 @@ service cloud.firestore {
     match /orders/{orderId} {
       allow read: if isSignedIn() &&
         (resource.data.userId == request.auth.uid || isAdmin());
+
+      // SECURITY FIX — the previous rule only checked ownership, so a
+      // client could forge `status` (e.g. create an order as
+      // 'completed', skipping the whole received/washing/drying/ready
+      // pipeline) or write an arbitrary/negative `total`/`subtotal`.
+      // `OrderRepository.createOrder` always creates an order as
+      // `status: 'pending'` with non-negative totals — this rule now
+      // enforces that a client can't create anything else. It does not
+      // (and can't, from rules alone) re-verify that `total` matches
+      // what `PriceCalculator` would have computed — that level of
+      // trust requires server-side computation (e.g. a Cloud Function),
+      // not Firestore rules.
       allow create: if isSignedIn() &&
-        request.resource.data.userId == request.auth.uid;
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.status == 'pending' &&
+        request.resource.data.total is number &&
+        request.resource.data.total >= 0 &&
+        request.resource.data.subtotal is number &&
+        request.resource.data.subtotal >= 0;
+
       allow update: if isAdmin();
       allow delete: if isAdmin();
     }
 
-    // ---------- counters/{counterId} ----------            <-- NEW
+    // ---------- counters/{counterId} ----------
     // Backs OrderDatasource.nextOrderSequence's atomic order-number
     // allocation (counters/orders_{YYYYMMDD}). Contains nothing but a
-    // running integer — no order/customer data — so any signed-in
-    // user may read/write it. Without this rule, Firestore's default
-    // deny-all applies and every order creation fails with
-    // permission-denied inside the transaction.
+    // running integer — no order/customer data.
+    //
+    // SECURITY FIX — the previous rule (`allow read, write: if
+    // isSignedIn()`) let any signed-in user overwrite this document
+    // with an arbitrary value (e.g. reset it to 0, causing today's
+    // order numbers to collide with existing ones, or jump it far
+    // ahead). `nextOrderSequence`'s transaction always writes exactly
+    // `{lastSequence: <previous value + 1>}` — this rule now enforces
+    // that shape and that increment, so the counter can still be
+    // advanced by any customer's checkout (which is required — see
+    // the datasource's doc comment on why this can't be admin-only)
+    // but can no longer be set to an arbitrary number.
     match /counters/{counterId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() &&
+        request.resource.data.keys().hasOnly(['lastSequence']) &&
+        request.resource.data.lastSequence is number &&
+        request.resource.data.lastSequence ==
+          (resource == null ? 1 : resource.data.lastSequence + 1);
     }
 
     // ---------- notifications/{notificationId} ----------
@@ -76,7 +130,28 @@ service cloud.firestore {
     }
 
     // ---------- promos/{promoId} ----------
+    // Backs PromoDatasource/PromoRepository — the redeemable promo
+    // codes shown on OffersScreen and managed on ManagePromosScreen
+    // (PART 18A/18B). Any signed-in user can read, only admins can
+    // create/update/delete promo documents.
     match /promos/{promoId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ---------- offers/{offerId} ----------
+    // Backs OfferService.streamActiveOffers (the "Current Offers"
+    // carousel on the dashboard/offer_card.dart). This collection is
+    // distinct from promos/{promoId} above — same read/write shape,
+    // but a separate collection entirely.
+    //
+    // BUG FIX — this collection previously had no match block at all,
+    // so every read fell through to Firestore's default-deny and
+    // failed with permission-denied, regardless of auth state. That
+    // was the actual cause of the "Current Offers" section silently
+    // failing to load (see the now-removed debug logging in
+    // offer_card.dart).
+    match /offers/{offerId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isAdmin();
     }

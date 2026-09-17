@@ -1,102 +1,101 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 
-/// Placeholder shape only — real promos arrive in Part 18
-/// (models/promo_model.dart, offers_screen.dart).
+import '../../../core/utils/price_calculator.dart';
+import '../../../data/repositories/promo_repository.dart';
+import '../../../models/promo_model.dart';
+
+/// Home-tab "Offers & Promos" section.
 ///
-/// Added `imageAsset` and `backgroundColor` so each promo card can show
-/// its own photo and pastel tint. Swap the two asset paths below for
-/// your real photos — no widget code needs to change to do that.
-class PlaceholderOffer {
-  const PlaceholderOffer({
-    required this.title,
-    required this.description,
-    required this.badge,
-    required this.imageAsset,
-    required this.backgroundColor,
-  });
-
-  final String title;
-  final String description;
-  final String badge; // e.g. "20% OFF"
-
-  /// Asset path for this offer's promo photo (see pubspec.yaml assets).
-  /// If the file isn't there yet, the card falls back to a simple icon
-  /// instead of crashing — see [OfferCard]'s errorBuilder.
-  final String imageAsset;
-
-  /// Soft pastel background tint for this card.
-  final Color backgroundColor;
-}
-
-const List<PlaceholderOffer> kPlaceholderOffers = [
-  PlaceholderOffer(
-    title: 'First Order Discount',
-    description: 'Get 20% off your first laundry order.',
-    badge: '20% OFF',
-    // TODO: replace with Photo 1 (First Order Discount) and add the
-    // matching entry under `flutter: assets:` in pubspec.yaml.
-    imageAsset: 'assets/images/offers/first_order_discount.png',
-    backgroundColor: Color(0xffFCE4E7), // soft pink
-  ),
-  PlaceholderOffer(
-    title: 'Weekend Bundle',
-    description: 'Bundle 2+ services on weekends and save.',
-    badge: 'BUNDLE',
-    // TODO: replace with Photo 2 (Weekend Bundle) and add the matching
-    // entry under `flutter: assets:` in pubspec.yaml.
-    imageAsset: 'assets/images/offers/weekend_bundle.png',
-    backgroundColor: Color(0xffE3EEFD), // soft blue
-  ),
-];
-
-/// Sizing bounds for a promo card, per the design spec: ~230–280 wide,
-/// ~110–130 tall. Width is derived responsively from the available
-/// layout width (see [CurrentOffersSection]) rather than fixed, so the
-/// row doesn't overflow on narrow phones.
-const double _kOfferCardMinWidth = 230;
-const double _kOfferCardMaxWidth = 280;
-const double _kOfferCardHeight = 122;
-const double _kOfferPhotoWidth = 96;
-const double _kOfferCardSpacing = 12;
-
-/// "Current Offers" section: a bold title, a "See all" accent link,
-/// and a horizontally-scrolling row of compact promo cards with slide
-/// arrows overlaid on the edges. Pulled out as its own widget so the
-/// Home tab just drops it in as one line.
+/// PART 19 — now a larger, horizontally-scrolling strip of
+/// photo-based promo cards (the admin-uploaded photo from
+/// [PromoModel.imageUrl] is each card's main visual), the whole
+/// section wrapped in the same frosted-glass panel recipe as "Our
+/// Services" (see [_GlassPanel] below — duplicated rather than
+/// imported, since that panel is private to
+/// service_selection_card.dart and "Our Services" itself must stay
+/// untouched).
+///
+/// Still reuses [PromoRepository.getVisiblePromos] — the same
+/// already-live, already-filtered (active + within date window) data
+/// source [OffersScreen] uses — so every promo shown here, for every
+/// promotion an admin creates (not just one hardcoded code), comes
+/// from the same real promotion data. Fails quietly (no error card)
+/// on a dashboard-level load failure, same reasoning as
+/// ActiveOrdersSection — the full Offers tab, backed by the same
+/// repository, already shows a real error state if the connection is
+/// actually down.
 class CurrentOffersSection extends StatefulWidget {
   const CurrentOffersSection({
     super.key,
-    this.offers = kPlaceholderOffers,
     this.onSeeAll,
+    this.promoRepository,
+    this.maxCards = 5,
   });
 
-  final List<PlaceholderOffer> offers;
-
-  /// Called when "See all" is tapped — typically navigates to (or
-  /// switches the bottom nav to) the full Offers screen. The link is
-  /// still shown if this is null; it simply won't do anything.
   final VoidCallback? onSeeAll;
+
+  /// Injectable for widget tests; defaults to a real
+  /// Firestore-backed [PromoRepository] — same pattern as
+  /// [ActiveOrdersSection]'s `orderRepository`.
+  final PromoRepository? promoRepository;
+
+  /// How many promo cards to show in the horizontal strip.
+  final int maxCards;
 
   @override
   State<CurrentOffersSection> createState() => _CurrentOffersSectionState();
 }
 
+/// Min/max bounds for the responsive offer-card width — noticeably
+/// larger than the old 190px text-only card, in the same spirit as
+/// _kMinCardWidth/_kMaxCardWidth in service_selection_card.dart.
+const double _kMinCardWidth = 240;
+const double _kMaxCardWidth = 320;
+
+/// Fraction of the available width a single card should target
+/// before being clamped — mirrors
+/// service_selection_card.dart's _kCardWidthFraction, tuned wider
+/// since these cards are meant to read as the larger, photo-led
+/// layout PART 19 asks for.
+const double _kCardWidthFraction = 0.78;
+
+/// Spacing between cards (must match the ListView's separatorBuilder).
+const double _kCardSpacing = 14;
+
+/// Height reserved below the photo for [_PromoOfferCard]'s text block:
+/// promo code (1 line) + spacing + subtitle (1 line) + spacing +
+/// description (up to 2 lines, reserved even when a promo has none,
+/// so every card in the row is the same height) + the card's own
+/// vertical padding (10 top + 14 bottom), plus a small buffer for
+/// line-height/text-scale rounding.
+const double _kCardTextBlockHeight = 108;
+
 class _CurrentOffersSectionState extends State<CurrentOffersSection> {
+  late final PromoRepository _promoRepository =
+      widget.promoRepository ?? PromoRepository();
+
+  // `late final` + assigned once in initState, not called inline in
+  // build() — same fix already applied to ActiveOrdersSection /
+  // AdminDashboard / MyOrdersScreen / OrderStatusTracker: calling a
+  // repository method directly inside build() hands FutureBuilder a
+  // brand-new Future every rebuild.
+  late Future<List<PromoModel>> _promosFuture;
+
   final ScrollController _scrollController = ScrollController();
 
-  // Kept in sync with scroll position so an arrow disables itself once
-  // you've hit that end of the list instead of doing nothing silently.
+  // Whether the left/right arrows should currently be enabled, kept
+  // in sync with scroll position — same pattern as
+  // _ServiceSelectionCardState._updateArrowState.
   bool _canScrollLeft = false;
   bool _canScrollRight = false;
 
   @override
   void initState() {
     super.initState();
+    _promosFuture = _promoRepository.getVisiblePromos();
     _scrollController.addListener(_updateArrowState);
-    // Check arrow enabled-state once the first frame has been laid out.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _updateArrowState();
-    });
   }
 
   @override
@@ -132,114 +131,228 @@ class _CurrentOffersSectionState extends State<CurrentOffersSection> {
     );
   }
 
+  double _cardWidthFor(double availableWidth) {
+    return (availableWidth * _kCardWidthFraction).clamp(_kMinCardWidth, _kMaxCardWidth);
+  }
+
+  /// Total card height for a given [cardWidth]: the 16:9 photo's
+  /// resulting height, plus a fixed budget for the text block below
+  /// it (promo code + subtitle + up to a 2-line description +
+  /// [_PromoOfferCard]'s own padding), plus a small safety buffer for
+  /// text-scale/line-height rounding.
+  ///
+  /// This used to be a flat `220` regardless of [cardWidth] or
+  /// whether a promo has a description, which is exactly why cards
+  /// were overflowing: at the card widths this section actually
+  /// produces, the photo alone is already close to 180px, leaving too
+  /// little room underneath for even a one-line title/subtitle, let
+  /// alone a two-line description.
+  double _cardHeightFor(double cardWidth) {
+    final photoHeight = cardWidth * 9 / 16;
+    return photoHeight + _kCardTextBlockHeight;
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (widget.offers.isEmpty) return const SizedBox.shrink();
+    final theme = Theme.of(context);
 
-    final textTheme = Theme.of(context).textTheme;
-    final accent = Theme.of(context).colorScheme.primary;
+    // PART 19 — the whole section (header + card strip) now lives
+    // inside its own frosted-glass panel, matching "Our Services",
+    // instead of sitting directly on the dashboard background.
+    return _GlassPanel(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final cardWidth = _cardWidthFor(constraints.maxWidth);
+          final scrollStep = cardWidth + _kCardSpacing;
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'Current Offers',
-              style: textTheme.titleMedium?.copyWith(
-                fontSize: 21,
-                fontWeight: FontWeight.w700,
-                color: Colors.black87,
-              ),
-            ),
-            GestureDetector(
-              onTap: widget.onSeeAll,
-              behavior: HitTestBehavior.opaque,
-              child: Padding(
-                // Small hit-area padding so "See all" is easy to tap
-                // without changing its visual position.
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 4,
-                  vertical: 4,
-                ),
-                child: Text(
-                  'See all',
-                  style: textTheme.labelLarge?.copyWith(
-                    color: accent,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            // ~0.66 of the available width shows one full card plus a
-            // peek of the next on typical phone widths, while the
-            // clamp keeps every card within the 230–280 spec even on
-            // very narrow or very wide layouts.
-            final cardWidth = (constraints.maxWidth * 0.66).clamp(
-              _kOfferCardMinWidth,
-              _kOfferCardMaxWidth,
-            );
-            // One arrow tap scrolls roughly one card + its separator.
-            final scrollStep = cardWidth + _kOfferCardSpacing;
-
-            return SizedBox(
-              height: _kOfferCardHeight,
-              child: Stack(
-                alignment: Alignment.center,
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header row: "Offers & Promos" + "See all" — kept
+              // exactly as before.
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  ListView.separated(
-                    controller: _scrollController,
-                    scrollDirection: Axis.horizontal,
-                    itemCount: widget.offers.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(width: _kOfferCardSpacing),
-                    itemBuilder: (context, index) {
-                      return OfferCard(
-                        offer: widget.offers[index],
-                        width: cardWidth,
-                      );
-                    },
+                  Text(
+                    'Offers & Promos',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: Colors.black87,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                  // Left slide arrow
-                  if (widget.offers.length > 1)
-                    Positioned(
-                      left: 0,
-                      child: _SlideArrowButton(
-                        icon: Icons.chevron_left,
-                        enabled: _canScrollLeft,
-                        onTap: () => _scrollBy(-scrollStep),
+                  GestureDetector(
+                    onTap: widget.onSeeAll,
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                      child: Text(
+                        'See all',
+                        style: theme.textTheme.labelLarge?.copyWith(
+                          color: theme.colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                  // Right slide arrow
-                  if (widget.offers.length > 1)
-                    Positioned(
-                      right: 0,
-                      child: _SlideArrowButton(
-                        icon: Icons.chevron_right,
-                        enabled: _canScrollRight,
-                        onTap: () => _scrollBy(scrollStep),
-                      ),
-                    ),
+                  ),
                 ],
               ),
-            );
-          },
-        ),
-      ],
+              const SizedBox(height: 14),
+              FutureBuilder<List<PromoModel>>(
+                future: _promosFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return SizedBox(
+                      height: _cardHeightFor(cardWidth),
+                      child: const Center(
+                        child: SizedBox(
+                          height: 22,
+                          width: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    );
+                  }
+
+                  if (snapshot.hasError) {
+                    // Dashboard-level section: fail quietly rather
+                    // than pushing an error card into the home
+                    // screen — the full Offers tab (same
+                    // PromoRepository) already surfaces a real error
+                    // state if the connection is actually down.
+                    return const SizedBox.shrink();
+                  }
+
+                  final promos = snapshot.data ?? const <PromoModel>[];
+                  if (promos.isEmpty) {
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.25),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                      ),
+                      alignment: Alignment.center,
+                      child: Text(
+                        'No active promotions right now',
+                        style: theme.textTheme.bodySmall?.copyWith(color: Colors.black54),
+                      ),
+                    );
+                  }
+
+                  final visible = promos.take(widget.maxCards).toList();
+
+                  // Check arrow enabled-state once the list has
+                  // content and a frame has been laid out.
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) _updateArrowState();
+                  });
+
+                  return SizedBox(
+                    height: _cardHeightFor(cardWidth),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        ListView.separated(
+                          controller: _scrollController,
+                          scrollDirection: Axis.horizontal,
+                          itemCount: visible.length,
+                          separatorBuilder: (_, _) => const SizedBox(width: _kCardSpacing),
+                          itemBuilder: (context, index) {
+                            return _PromoOfferCard(
+                              promo: visible[index],
+                              width: cardWidth,
+                              onTap: widget.onSeeAll,
+                            );
+                          },
+                        ),
+                        if (visible.length > 1)
+                          Positioned(
+                            left: 0,
+                            child: _SlideArrowButton(
+                              icon: Icons.chevron_left,
+                              enabled: _canScrollLeft,
+                              onTap: () => _scrollBy(-scrollStep),
+                            ),
+                          ),
+                        if (visible.length > 1)
+                          Positioned(
+                            right: 0,
+                            child: _SlideArrowButton(
+                              icon: Icons.chevron_right,
+                              enabled: _canScrollRight,
+                              onTap: () => _scrollBy(scrollStep),
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
 
-/// Small circular arrow button overlaid on the offer list's edges for
-/// sliding the row left/right. Dims and ignores taps once that
-/// direction has nothing left to scroll to. Solid white + soft shadow
-/// to match the pastel promo cards it floats over.
+/// Frosted-glass container for the whole "Offers & Promos" section.
+///
+/// Deliberately the exact same recipe as
+/// service_selection_card.dart's private `_GlassPanel` (blur + low-alpha
+/// white gradient fill + soft white border + floating shadow) so both
+/// dashboard sections read as one consistent glass material — "Our
+/// Services" itself is left completely untouched, this is a separate
+/// copy scoped to this file only.
+class _GlassPanel extends StatelessWidget {
+  const _GlassPanel({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.white.withValues(alpha: 0.30),
+                Colors.white.withValues(alpha: 0.12),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: 0.5),
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 26,
+                spreadRadius: -6,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// Small circular arrow button overlaid on the list edges — same
+/// frosted-glass disc recipe as
+/// service_selection_card.dart's private `_SlideArrowButton`,
+/// duplicated here for the same reason as [_GlassPanel] above. Dims
+/// and ignores taps once that direction has nothing left to scroll to.
 class _SlideArrowButton extends StatelessWidget {
   const _SlideArrowButton({
     required this.icon,
@@ -256,18 +369,26 @@ class _SlideArrowButton extends StatelessWidget {
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 150),
       opacity: enabled ? 1 : 0.3,
-      child: Material(
-        color: Colors.white,
-        shape: const CircleBorder(),
-        elevation: 3,
-        shadowColor: Colors.black.withValues(alpha: 0.15),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: enabled ? onTap : null,
-          child: SizedBox(
-            width: 30,
-            height: 30,
-            child: Icon(icon, size: 18, color: Colors.black87),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(100),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.35),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white.withValues(alpha: 0.5)),
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                customBorder: const CircleBorder(),
+                onTap: enabled ? onTap : null,
+                child: Icon(icon, size: 20, color: Colors.black87),
+              ),
+            ),
           ),
         ),
       ),
@@ -275,128 +396,214 @@ class _SlideArrowButton extends StatelessWidget {
   }
 }
 
-/// Compact horizontal promo card: pastel background, text + badge on
-/// the left, promo photo bleeding to the rounded edge on the right.
-class OfferCard extends StatelessWidget {
-  const OfferCard({super.key, required this.offer, this.width});
+/// One large, photo-led promo card in the home tab's horizontal
+/// strip.
+///
+/// PART 19 — [promo.imageUrl] (the photo the admin uploaded when
+/// creating/editing this exact promotion — see AddPromoScreen /
+/// EditPromoScreen) is the card's main visual, `BoxFit.cover`'d
+/// inside a fixed aspect ratio so it's always cleanly cropped and
+/// never stretched or distorted. With no photo uploaded yet, this
+/// shows a plain tinted icon tile — never a placeholder/stock photo —
+/// so PromoModel.imageUrl being unset always stays visibly obvious
+/// rather than silently faked.
+///
+/// Purely presentational — tapping it just opens the full Offers tab
+/// (via [onTap], typically [CurrentOffersSection.onSeeAll]) rather
+/// than redeeming the code itself; redemption stays on OffersScreen.
+class _PromoOfferCard extends StatelessWidget {
+  const _PromoOfferCard({
+    required this.promo,
+    required this.width,
+    this.onTap,
+  });
 
-  final PlaceholderOffer offer;
-
-  /// Explicit card width, normally supplied by [CurrentOffersSection]
-  /// so every card in the row matches. Falls back to the max spec
-  /// width if used standalone (e.g. on the full Offers screen).
-  final double? width;
+  final PromoModel promo;
+  final double width;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    final cardWidth = (width ?? _kOfferCardMaxWidth).clamp(
-      _kOfferCardMinWidth,
-      _kOfferCardMaxWidth,
-    );
+    final theme = Theme.of(context);
 
-    return Container(
-      width: cardWidth,
-      height: _kOfferCardHeight,
-      decoration: BoxDecoration(
-        color: offer.backgroundColor,
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 14,
-            spreadRadius: 1,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Left: title, description, badge.
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: BackdropFilter(
+          filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            width: width,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: 0.30),
+                  Colors.white.withValues(alpha: 0.10),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.55),
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.06),
+                  blurRadius: 30,
+                  spreadRadius: -8,
+                  offset: const Offset(0, 12),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Photo section — the admin-provided image is the
+                // main visual here, cropped (never stretched) to a
+                // fixed aspect ratio.
+                AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: Stack(
+                    fit: StackFit.expand,
                     children: [
-                      Text(
-                        offer.title,
-                        style: textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.black87,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        offer.description,
-                        style: textTheme.bodySmall?.copyWith(
-                          color: Colors.black54,
-                          height: 1.25,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      _PromoPhoto(promo: promo),
+                      // Discount badge, floated on top of the photo.
+                      Positioned(
+                        left: 10,
+                        top: 10,
+                        child: _GlassBadge(text: promo.discountLabel),
                       ),
                     ],
                   ),
-                  // Compact badge pill.
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.75),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      offer.badge,
-                      style: textTheme.labelSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 10,
-                        color: Colors.black87,
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        promo.code,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: Colors.black87,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 4),
+                      Text(
+                        promo.minimumOrder > 0
+                            ? 'Min. order ${PriceCalculator.formatCurrency(promo.minimumOrder)}'
+                            : 'No minimum order',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(color: Colors.black54),
+                      ),
+                      if (promo.description.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          promo.description,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(color: Colors.black54),
+                        ),
+                      ],
+                    ],
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-          // Right: promo photo, clipped to the card's rounded edge.
-          ClipRRect(
-            borderRadius: const BorderRadius.only(
-              topRight: Radius.circular(18),
-              bottomRight: Radius.circular(18),
-            ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The promo's photo, or a graceful (non-fake) fallback tile when
+/// [PromoModel.imageUrl] hasn't been set yet, or fails to load.
+class _PromoPhoto extends StatelessWidget {
+  const _PromoPhoto({required this.promo});
+
+  final PromoModel promo;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    if (!promo.hasImage) {
+      return _fallback(colors);
+    }
+
+    return Image.network(
+      promo.imageUrl!,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => _fallback(colors),
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return Container(
+          color: colors.primaryContainer.withValues(alpha: 0.4),
+          child: const Center(
             child: SizedBox(
-              width: _kOfferPhotoWidth,
-              child: Image.asset(
-                offer.imageAsset,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  // Shown until the real asset is added — keeps the
-                  // layout intact instead of throwing.
-                  return Container(
-                    color: Colors.black.withValues(alpha: 0.06),
-                    child: const Center(
-                      child: Icon(
-                        Icons.local_offer_outlined,
-                        size: 26,
-                        color: Colors.black45,
-                      ),
-                    ),
-                  );
-                },
-              ),
+              height: 20,
+              width: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
             ),
           ),
-        ],
+        );
+      },
+    );
+  }
+
+  Widget _fallback(ColorScheme colors) {
+    // Deliberately just a tinted tile + icon — never a stock/placeholder
+    // photo — so a promo with no uploaded photo stays visibly distinct
+    // from one that has a real photo behind it.
+    return Container(
+      color: colors.primaryContainer.withValues(alpha: 0.55),
+      alignment: Alignment.center,
+      child: Icon(
+        Icons.local_offer_outlined,
+        size: 36,
+        color: colors.onPrimaryContainer.withValues(alpha: 0.7),
+      ),
+    );
+  }
+}
+
+class _GlassBadge extends StatelessWidget {
+  const _GlassBadge({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(100),
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(100),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 0.8),
+          ),
+          child: Text(
+            text,
+            style: const TextStyle(
+              color: Colors.black87,
+              fontWeight: FontWeight.w700,
+              fontSize: 12,
+            ),
+          ),
+        ),
       ),
     );
   }

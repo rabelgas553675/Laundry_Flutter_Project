@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/price_calculator.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/status_badge.dart';
 import '../../../models/service_model.dart';
@@ -66,7 +67,8 @@ class AdminServiceCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '${PriceCalculator.formatCurrency(service.pricePerKg)}/kg · ${service.estimatedTime}',
+                  '${ServiceUnitFormat.formatPricePerUnit(service.unit, PriceCalculator.formatCurrency(service.pricePerKg))} · '
+                  '${service.estimatedTime}',
                   style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ],

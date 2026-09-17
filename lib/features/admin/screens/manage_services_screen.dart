@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_state.dart';
 import '../../../core/widgets/loading_widget.dart';
+import '../../../data/repositories/service_item_repository.dart';
 import '../../../data/repositories/service_repository.dart';
 import '../../../models/service_model.dart';
 import '../widgets/admin_service_card.dart';
@@ -42,14 +43,72 @@ class ManageServicesScreen extends StatefulWidget {
 class _ManageServicesScreenState extends State<ManageServicesScreen> {
   late final ServiceRepository _repository = widget.repository ?? ServiceRepository();
 
+  /// Seeds each itemized service's per-garment catalog (currently
+  /// only Dry Cleaning / Wash & Ironing have one — see
+  /// [ServiceItemRepository.seedDefaultItemsIfEmpty]). Only ever
+  /// written to from here, an admin-only screen, the same way
+  /// [ServiceRepository.seedDefaultServicesIfEmpty] is only ever
+  /// *reliably* written to from here — every customer-facing
+  /// screen's attempt is best-effort and silently fails under
+  /// `firestore.rules`.
+  final ServiceItemRepository _itemRepository = ServiceItemRepository();
+
   late Future<List<ServiceModel>> _servicesFuture = _load();
 
   /// Id of the service whose activate/deactivate switch is mid-flight,
   /// so only that one card shows a spinner rather than the whole list.
   String? _togglingServiceId;
 
-  Future<List<ServiceModel>> _load() {
-    return _repository.getAllServices();
+  /// BUG FIX — this screen used to call [ServiceRepository.getAllServices]
+  /// directly and nothing else, despite that method's own doc comment
+  /// claiming this screen was "the one caller that genuinely can seed
+  /// successfully" (because it's admin-only, so the `services` create
+  /// actually succeeds instead of being silently swallowed like it is
+  /// for every customer-facing caller — see
+  /// [ServiceRepository.seedDefaultServicesIfEmpty]'s doc comment).
+  /// That call was never actually made, so there was no path in the
+  /// app — customer or admin — that could ever create a
+  /// [kDefaultServices] entry added after a Firestore project already
+  /// had some services in it (e.g. "Dry Cleaning"/"Wash & Ironing" for
+  /// an existing project). Customers would see "Dry Cleaning is not
+  /// available yet." forever, because nothing ever created that
+  /// document.
+  ///
+  /// Calling it here — before the admin's own list loads — means the
+  /// very first time any admin opens Manage Services after a new
+  /// default is added to the catalog, it gets created for real, and
+  /// every customer-facing screen's own (best-effort, silently-failing)
+  /// seed attempt has nothing left to do from then on.
+  Future<List<ServiceModel>> _load() async {
+    await _repository.seedDefaultServicesIfEmpty();
+    final services = await _repository.getAllServices();
+
+    // BUG FIX — seeding the *service* documents above (Dry Cleaning,
+    // Wash & Ironing) is only half of what those two services need:
+    // each also has its own per-garment/per-load catalog stored at
+    // `services/{serviceId}/items`, which nothing was ever seeding.
+    // `DryCleaningItemSelection` does call
+    // `ServiceItemRepository.seedDefaultItemsIfEmpty` on its own, but
+    // only from the *customer* order screen — and per
+    // `firestore.rules`, a customer's write to that subcollection is
+    // rejected and silently swallowed, same reasoning as
+    // `seedDefaultServicesIfEmpty`'s doc comment above. So a Dry
+    // Cleaning service created (or seeded) after a project already
+    // existed could sit forever with zero item documents, showing
+    // "No items available" to every customer, exactly like the
+    // parent service document itself used to.
+    //
+    // Seeding here — an admin-only screen — means the write actually
+    // succeeds. `seedDefaultItemsIfEmpty` is itself idempotent (only
+    // writes when a service has zero item documents), so it's safe
+    // to call for every service on every load, and does nothing at
+    // all for service types with no default catalog (Quick/Standard/
+    // Premium Wash — see `_defaultCatalogFor`).
+    for (final service in services) {
+      await _itemRepository.seedDefaultItemsIfEmpty(service.id, service.serviceType);
+    }
+
+    return services;
   }
 
   Future<void> _refresh() async {

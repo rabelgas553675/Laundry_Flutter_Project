@@ -24,7 +24,9 @@ import 'package:pdf/widgets.dart' as pw;
 
 import '../app/constants.dart';
 import '../core/utils/price_calculator.dart';
+import '../core/utils/service_unit.dart';
 import '../features/user/widgets/order_list_tile.dart' show OrderStatusStyle;
+import '../models/order_item_model.dart';
 import '../models/order_model.dart';
 import '../models/user_model.dart';
 import 'report_service.dart';
@@ -69,6 +71,20 @@ class PdfService {
   // Shared page chrome
   // ---------------------------------------------------------------
 
+  /// Placeholder for "no value" cells/labels in a generated PDF.
+  ///
+  /// Deliberately a plain ASCII hyphen, not an em dash ('—' / U+2014):
+  /// the `pdf` package's default Helvetica base font has no Unicode
+  /// glyph table, so an em dash prints as a visible "missing glyph"
+  /// box on every receipt/report that hits one of these placeholders
+  /// — most commonly the Dry Cleaning receipt's "Weight" row, since
+  /// an itemized order always has `weightKg == 0`. The in-app Flutter
+  /// widgets that show the same em dash (order details/summary
+  /// screens, admin cards) are unaffected and unchanged — Flutter's
+  /// own text rendering uses a full Unicode-capable system font, only
+  /// the separately-rendered PDF output does not.
+  static const _placeholder = '-';
+
   static const _padding = pw.EdgeInsets.symmetric(horizontal: 32, vertical: 32);
 
   static pw.Widget _brandHeader({
@@ -103,6 +119,60 @@ class PdfService {
       padding: const pw.EdgeInsets.only(bottom: 6),
       child: pw.Text(text, style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold)),
     );
+  }
+
+  /// Part 3 (per-piece pricing) — the receipt's "Order Contents" row
+  /// needs a per-unit rate (`'₱150/pc'` / `'₱80/kg'`) to match the
+  /// spec's example (`"Dry Cleaning  3 pcs  ₱150/pc  ₱450"`), but
+  /// [OrderReceiptData]/[OrderModel] deliberately never persist the
+  /// service's price-per-unit directly (only the already-computed
+  /// [OrderReceiptData.subtotal]). Since `subtotal` is always exactly
+  /// `pricePerUnit * quantity` with no fees mixed in (see
+  /// `PriceCalculator.calculate`), dividing back out is safe and
+  /// avoids adding a redundant field that could drift from `subtotal`
+  /// if it were ever stored separately.
+  static String _rateLabel(OrderReceiptData receipt) {
+    // PART 3/5 fix — the `pdf` package's default Helvetica base font
+    // has no glyph for U+2014 (em dash), which prints as a visible
+    // "missing glyph" box on every itemized (Dry Cleaning) receipt,
+    // since those always have `weightKg == 0` and hit this branch.
+    // A plain ASCII hyphen renders correctly under every base14 font
+    // without pulling in a bundled Unicode font just for one
+    // character. Every other placeholder in this file was changed
+    // the same way, for the same reason — see `_placeholder` below.
+    if (receipt.weightKg <= 0) return _placeholder;
+    final rate = receipt.subtotal / receipt.weightKg;
+    return ServiceUnitFormat.formatPricePerUnit(receipt.serviceUnit, _currency(rate));
+  }
+
+  /// PART 5 fix — the receipt's "Quantity"/"Weight" cell, unit-aware
+  /// the same way [_rateLabel] is. An itemized (Dry Cleaning) receipt
+  /// always has `weightKg == 0` (it isn't priced by weight at all —
+  /// see [OrderReceiptData.isItemized]'s doc comment), so running it
+  /// through `formatQuantity` would print every Dry Cleaning receipt
+  /// as `"0 pcs"`. Show the garment-type count instead, matching the
+  /// exact same fix already applied to `order_list_tile.dart`,
+  /// `admin_order_card.dart`, and `active_order_card.dart`.
+  static String _quantityLabel(OrderReceiptData receipt) {
+    if (receipt.isItemized) return '${receipt.items.length} item type(s)';
+    return ServiceUnitFormat.formatQuantity(receipt.serviceUnit, receipt.weightKg);
+  }
+
+  /// PART 5 fix — the receipt's "Items" cell. [OrderReceiptData
+  /// .itemNames] alone (`'Suit, Dress, Formal Pants'`) drops the
+  /// per-garment quantity, so a Dry Cleaning receipt could never
+  /// actually show `"2 × Suit"` the way the on-screen Order Summary/
+  /// Order Details breakdown does (`OrderItemsBreakdown`). Builds the
+  /// same `"{quantity} × {name}"` format from the full [OrderItemModel]
+  /// list instead. A Wash & Ironing receipt's unpriced category tags
+  /// (`quantity == 1` for every tag) keep reading as plain names —
+  /// `"1 × T-Shirt"` would be redundant noise a customer never asked
+  /// for, so only an itemized line shows its quantity prefix.
+  static String _itemsLabel(OrderReceiptData receipt) {
+    if (receipt.items.isEmpty) return _placeholder;
+    return receipt.items
+        .map((item) => receipt.isItemized ? '${item.quantity} × ${item.itemName}' : item.itemName)
+        .join(', ');
   }
 
   static pw.Widget _summaryRow(String label, String value, {bool emphasize = false}) {
@@ -171,7 +241,7 @@ class PdfService {
                 for (final order in completedOrders)
                   [
                     order.orderNumber,
-                    order.createdAt != null ? ReportService.formatDate(order.createdAt!) : '—',
+                    order.createdAt != null ? ReportService.formatDate(order.createdAt!) : _placeholder,
                     order.serviceName,
                     _currency(order.total),
                   ],
@@ -283,13 +353,35 @@ class PdfService {
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9),
               cellStyle: const pw.TextStyle(fontSize: 10),
               headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
-              headers: const ['Service', 'Weight', 'Detergent', 'Items'],
+              cellAlignments: const {
+                0: pw.Alignment.centerLeft,
+                1: pw.Alignment.centerLeft,
+                2: pw.Alignment.centerLeft,
+                3: pw.Alignment.centerLeft,
+                4: pw.Alignment.centerLeft,
+              },
+              // Part 3 — the quantity column's header and value both
+              // come from `receipt.serviceUnit` (the unit this order
+              // was actually placed under — see
+              // `OrderReceiptData.fromOrder`), never a hard-coded
+              // "Weight"/"kg". A piece-based receipt reads
+              // "Quantity" / "3 pcs" / "₱150/pc"; a kg-based one
+              // keeps reading "Weight" / "3 kg" / "₱80/kg". Never
+              // "3.0 kg" for a piece order.
+              headers: [
+                'Service',
+                receipt.serviceUnit.quantityFieldLabel,
+                'Rate',
+                'Detergent',
+                'Items',
+              ],
               data: [
                 [
                   receipt.serviceName,
-                  '${receipt.weightKg.toStringAsFixed(1)} kg',
-                  receipt.detergentName.isNotEmpty ? receipt.detergentName : '—',
-                  receipt.itemNames.isNotEmpty ? receipt.itemNames.join(', ') : '—',
+                  _quantityLabel(receipt),
+                  _rateLabel(receipt),
+                  receipt.detergentName.isNotEmpty ? receipt.detergentName : _placeholder,
+                  _itemsLabel(receipt),
                 ],
               ],
             ),
@@ -355,7 +447,7 @@ class PdfService {
         pw.Text('Order Info', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
         pw.SizedBox(height: 4),
         pw.Text(
-          'Order Date: ${receipt.orderDate != null ? _formatDateTime(receipt.orderDate!) : '—'}',
+          'Order Date: ${receipt.orderDate != null ? _formatDateTime(receipt.orderDate!) : _placeholder}',
           style: const pw.TextStyle(fontSize: 10),
         ),
         pw.Text(
@@ -383,7 +475,32 @@ class OrderReceiptData {
 
   final String serviceName;
   final double weightKg;
+
+  /// Part 3 — the unit [weightKg] was actually priced under when
+  /// this order was placed (`OrderModel.serviceUnit`), never the
+  /// service's *current* configuration. This is what lets a
+  /// historical Dry Cleaning receipt keep reading `"3 pcs"` even if
+  /// an admin later reconfigures that service to be kg-based (or
+  /// vice versa).
+  final ServiceUnit serviceUnit;
+
+  /// PART 3/5 fix — bare display names only (`'Suit'`, `'Dress'`),
+  /// kept for source-compat with anything still reading this field,
+  /// but no longer used to render the receipt's "Items" cell (see
+  /// [items]/[_itemsLabel] below) since it has no quantity — a Dry
+  /// Cleaning receipt built from just [itemNames] can't show
+  /// `"2 × Suit"`, only `"Suit"`.
   final List<String> itemNames;
+
+  /// PART 5 fix — the full priced line list (`OrderModel.items`),
+  /// carrying each garment's `quantity`/`unitPrice` for an itemized
+  /// (Dry Cleaning) order, or the plain unpriced category tags for a
+  /// weight-based (Wash & Ironing) one. Lets the receipt render
+  /// `"2 × Suit"` instead of just `"Suit"`, and lets [isItemized]
+  /// mirror `OrderModel.isItemized` exactly instead of guessing from
+  /// [weightKg].
+  final List<OrderItemModel> items;
+
   final String detergentName;
 
   final double subtotal;
@@ -398,6 +515,13 @@ class OrderReceiptData {
   final bool isPickup;
   final String? deliveryAddress;
 
+  /// PART 5 fix — mirrors `OrderModel.isItemized` exactly (a Dry
+  /// Cleaning order's [items] carry a real `unitPrice`; a Wash &
+  /// Ironing order's category tags are always `unitPrice == 0`), so
+  /// the receipt branches on the same rule every other screen does
+  /// rather than re-deriving it from [weightKg].
+  bool get isItemized => items.any((item) => item.unitPrice > 0);
+
   const OrderReceiptData({
     required this.orderId,
     required this.orderNumber,
@@ -407,7 +531,9 @@ class OrderReceiptData {
     required this.customerEmail,
     required this.serviceName,
     required this.weightKg,
+    required this.serviceUnit,
     required this.itemNames,
+    required this.items,
     required this.detergentName,
     required this.subtotal,
     required this.detergentFee,
@@ -446,7 +572,9 @@ class OrderReceiptData {
       customerEmail: customer?.email ?? '',
       serviceName: order.serviceName,
       weightKg: order.weight,
+      serviceUnit: order.serviceUnit,
       itemNames: order.items.map((item) => item.itemName).toList(),
+      items: order.items,
       detergentName: order.detergentName,
       subtotal: order.subtotal,
       detergentFee: order.detergentFee,

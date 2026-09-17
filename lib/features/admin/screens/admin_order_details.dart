@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/price_calculator.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/error_state.dart';
 import '../../../core/widgets/loading_widget.dart';
@@ -11,6 +12,7 @@ import '../../../models/order_model.dart';
 import '../../../models/user_model.dart';
 import '../../../services/pdf_service.dart';
 import '../../../services/printing_service.dart';
+import '../../user/widgets/order_items_breakdown.dart';
 import '../../user/widgets/order_list_tile.dart' show OrderStatusStyle, formatOrderDate;
 import '../widgets/report_actions_row.dart';
 
@@ -392,10 +394,34 @@ class _OrderInfoCard extends StatelessWidget {
           const SizedBox(height: 8),
           _Row(label: 'Order Number', value: order.orderNumber),
           _Row(label: 'Service', value: order.serviceName),
-          _Row(label: 'Weight', value: '${order.weight.toStringAsFixed(1)} kg'),
+          // PART 3/5 fix — this screen was unconditionally showing
+          // `order.weight` here (always 0 for an itemized Dry
+          // Cleaning order, since that's priced per garment, not by
+          // weight — see `OrderRepository.createOrder`), so every
+          // Dry Cleaning order was showing an Admin "Weight: 0 pcs"
+          // row. Branch on `order.isItemized` the same way
+          // `order_details_screen.dart`'s customer-facing equivalent
+          // already does: show the priced `"2 × Suit  ₱300"`
+          // breakdown instead of a bogus weight/quantity row.
+          if (order.isItemized) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Items',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodyMedium
+                  ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 6),
+            OrderItemsBreakdown(items: order.items),
+          ] else
+            _Row(
+              label: order.serviceUnit.quantityFieldLabel,
+              value: ServiceUnitFormat.formatQuantity(order.serviceUnit, order.weight),
+            ),
           if (order.detergentName.isNotEmpty)
             _Row(label: 'Detergent', value: order.detergentName),
-          if (order.items.isNotEmpty)
+          if (!order.isItemized && order.items.isNotEmpty)
             _Row(
               label: 'Laundry Items',
               value: order.items.map((item) => item.itemName).join(', '),

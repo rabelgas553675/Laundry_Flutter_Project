@@ -23,6 +23,11 @@ import 'offers_screen.dart';
 /// which SafeArea adds on top of this).
 const double _kAppBarContentHeight = 64;
 
+/// Tab index of the Profile screen inside [UserDashboard]'s `tabs` /
+/// `tabTitles` lists — used by the app bar's profile button so tapping
+/// it jumps straight to Profile regardless of which tab is active.
+const int _kProfileTabIndex = 4;
+
 class UserDashboard extends StatefulWidget {
   const UserDashboard({super.key});
 
@@ -105,8 +110,11 @@ class _UserDashboardState extends State<UserDashboard> {
       const ProfileScreen(embedded: true),
     ];
 
+    // Shown per-tab in the app bar, next to the logo/"HYDRO" brand
+    // mark — every tab now carries the same brand lockup, not just
+    // Home (see _BrandAppBarLabel).
     const tabTitles = <String>[
-      'User Dashboard',
+      'Our Services',
       'Orders',
       'Offers',
       'Notifications',
@@ -121,7 +129,13 @@ class _UserDashboardState extends State<UserDashboard> {
         preferredSize: Size.fromHeight(appBarTotalHeight),
         child: _DashboardAppBar(
           title: tabTitles[_navIndex],
+          userName: user?.name ?? '',
           onLogout: () => _handleLogout(context),
+          // Tapping the profile avatar/name jumps straight to the
+          // Profile tab, same pattern as onSeeAllOffers/onSeeAllOrders
+          // above — no separate navigation route needed since Profile
+          // already lives in `tabs`.
+          onProfileTap: () => setState(() => _navIndex = _kProfileTabIndex),
         ),
       ),
       body: Stack(
@@ -234,11 +248,33 @@ class _DashboardBackground extends StatelessWidget {
 /// Frosted-glass app bar: a blurred, semi-transparent dark bar (content
 /// scrolling behind it shows through, softened) instead of a solid
 /// near-opaque fill — matching the bottom nav's glass treatment.
+///
+/// Layout is a strict `Left icon → Title+Brand → [flexible space] →
+/// Profile → Logout` row: the accent bar sits flush near the left edge
+/// with only small consistent padding, the title+brand label is pinned
+/// immediately beside it via `Alignment.centerLeft` (so it can never
+/// drift into empty space), and the profile/logout gap on the right
+/// uses the same spacing value on both sides.
+///
+/// Every tab (Home, Orders, Offers, Notifications, Profile) shows the
+/// same lockup: `[tab title] | [logo] HYDRO`.
 class _DashboardAppBar extends StatelessWidget {
-  const _DashboardAppBar({required this.title, required this.onLogout});
+  const _DashboardAppBar({
+    required this.title,
+    required this.userName,
+    required this.onLogout,
+    required this.onProfileTap,
+  });
 
   final String title;
+  final String userName;
   final VoidCallback onLogout;
+  final VoidCallback onProfileTap;
+
+  // Single spacing constant reused for every gap in this bar (left
+  // edge → icon, icon → title, and profile → logout) so the whole row
+  // reads as one consistent rhythm instead of mismatched paddings.
+  static const double _gap = 8;
 
   @override
   Widget build(BuildContext context) {
@@ -282,34 +318,219 @@ class _DashboardAppBar extends StatelessWidget {
             child: SizedBox(
               height: _kAppBarContentHeight,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 0, 10, 0),
+                // Small, equal left/right padding — this is the only
+                // space between the bar's edges and its content on
+                // either side, so there's nowhere left for a stray gap
+                // to hide.
+                padding: const EdgeInsets.symmetric(horizontal: _gap + 4),
                 child: Row(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
+                    // "Left icon" — the accent bar, flush against the
+                    // padding above with no extra margin of its own.
                     Container(
                       width: 3,
                       height: 18,
-                      margin: const EdgeInsets.only(right: 10),
                       decoration: BoxDecoration(
                         color: colorScheme.primary,
                         borderRadius: BorderRadius.circular(3),
                       ),
                     ),
+                    const SizedBox(width: _gap),
+                    // Title + brand mark sit immediately beside the
+                    // icon — Alignment.centerLeft pins them to the
+                    // start of this Expanded box regardless of their
+                    // own intrinsic width, so they can never read as
+                    // floating with empty space before them.
                     Expanded(
-                      child: _SlidingTitle(
-                        text: title,
-                        style: const TextStyle(
-                          color: Colors.black87,
-                          fontSize: 21,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.1,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _BrandAppBarLabel(
+                          key: ValueKey(title),
+                          title: title,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    _ProfileButton(
+                      userName: userName,
+                      onTap: onProfileTap,
+                    ),
+                    const SizedBox(width: _gap),
                     _GlassIconButton(onPressed: onLogout),
                   ],
                 ),
               ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// App bar label shown on every tab: the current tab's title (animated
+/// in on change via [_SlidingTitle]), a thin divider, then the compact
+/// logo mark + "HYDRO" wordmark — so "Our Services", "Orders",
+/// "Offers", "Notifications" and "Profile" all carry the same brand
+/// lockup.
+class _BrandAppBarLabel extends StatelessWidget {
+  const _BrandAppBarLabel({
+    super.key,
+    required this.title,
+  }) : logoAsset = 'assets/images/logo.png',
+       logoHeight = 26;
+
+  final String title;
+  final String logoAsset;
+  final double logoHeight;
+
+  // Aspect ratio of just the washer icon mark (roughly square), not
+  // the full lockup — matches WelcomeHeader's icon-only crop so the
+  // two brand marks line up visually.
+  static const double _logoAspectRatio = 1.0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Flexible(
+          child: _SlidingTitle(
+            text: title,
+            style: const TextStyle(
+              color: Colors.black87,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.1,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        // Thin divider so the tab title and the brand mark read as
+        // two related but distinct pieces, not run-together text.
+        Container(
+          width: 1,
+          height: 16,
+          color: Colors.black.withValues(alpha: 0.15),
+        ),
+        const SizedBox(width: 10),
+        SizedBox(
+          width: logoHeight * _logoAspectRatio,
+          height: logoHeight,
+          child: Image.asset(
+            logoAsset,
+            alignment: Alignment.centerLeft,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stackTrace) {
+              return const Align(
+                alignment: Alignment.centerLeft,
+                child: Icon(
+                  Icons.local_laundry_service_outlined,
+                  size: 20,
+                  color: Colors.black45,
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          'HYDRO',
+          style: TextStyle(
+            fontSize: logoHeight * 0.54,
+            fontWeight: FontWeight.w800,
+            letterSpacing: 0.4,
+            height: 1.0,
+            color: const Color(0xff2E75B6),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Tappable profile entry point in the app bar: a circular avatar
+/// (first initial of the signed-in user's name, or a person icon if no
+/// name is available yet) plus the user's first name. Tapping anywhere
+/// on it — avatar or name — jumps to the Profile tab via [onTap].
+///
+/// The name label shrinks/hides on very narrow widths (via Flexible +
+/// ellipsis) so it never pushes the logout button off-screen; the
+/// avatar itself is always shown.
+class _ProfileButton extends StatelessWidget {
+  const _ProfileButton({required this.userName, required this.onTap});
+
+  final String userName;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final trimmed = userName.trim();
+    final firstName = trimmed.isNotEmpty ? trimmed.split(' ').first : '';
+    final initial = firstName.isNotEmpty ? firstName[0].toUpperCase() : '';
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(100),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            constraints: const BoxConstraints(maxWidth: 130),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.25),
+              borderRadius: BorderRadius.circular(100),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: colorScheme.primary.withValues(alpha: 0.85),
+                  ),
+                  alignment: Alignment.center,
+                  child: initial.isNotEmpty
+                      ? Text(
+                          initial,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.person_rounded,
+                          size: 16,
+                          color: Colors.white,
+                        ),
+                ),
+                if (firstName.isNotEmpty) ...[
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      firstName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                ],
+              ],
             ),
           ),
         ),
@@ -610,7 +831,7 @@ class _HomeTab extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 16),
       children: [
         WelcomeHeader(name: userName),
-        const SizedBox(height: 20),
+        const SizedBox(height: 10),
         // PART 14+ — replaced the static `PlaceholderActiveOrder`
         // sample with the real, live-streaming ActiveOrdersSection:
         // it owns its own Firestore subscription

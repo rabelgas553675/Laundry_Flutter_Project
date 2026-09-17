@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../../core/utils/price_calculator.dart';
 import '../../models/promo_model.dart';
 import '../datasources/promo_datasource.dart';
@@ -15,6 +17,13 @@ enum PromoValidationStatus {
   notStartedYet,
   expired,
   belowMinimumOrder,
+
+  /// PART 2 fix — a Firestore/network failure while checking the code
+  /// (timeout, offline, permission error, etc.), as opposed to the
+  /// code genuinely not existing ([invalidCode]). Kept distinct so the
+  /// UI can show "couldn't check your code, try again" instead of the
+  /// misleading "this code doesn't exist".
+  error,
 }
 
 /// Result of [PromoRepository.validateCode].
@@ -97,7 +106,29 @@ class PromoRepository {
       );
     }
 
-    final promo = await _datasource.getByCode(trimmed.toUpperCase());
+    PromoModel? promo;
+    try {
+      promo = await _datasource.getByCode(trimmed.toUpperCase());
+    } on FirebaseException catch (e) {
+      return PromoValidationResult(
+        status: PromoValidationStatus.error,
+        promo: null,
+        discountAmount: 0,
+        newTotal: null,
+        message: e.code == 'deadline-exceeded'
+            ? 'Timed out checking that promo code — check your connection and try again.'
+            : 'We couldn\'t check that promo code right now. Please try again.',
+      );
+    } catch (_) {
+      return const PromoValidationResult(
+        status: PromoValidationStatus.error,
+        promo: null,
+        discountAmount: 0,
+        newTotal: null,
+        message: 'We couldn\'t check that promo code right now. Please try again.',
+      );
+    }
+
     if (promo == null) {
       return const PromoValidationResult(
         status: PromoValidationStatus.invalidCode,
@@ -185,17 +216,35 @@ class PromoRepository {
     return _datasource.isCodeTaken(code.trim().toUpperCase(), excludeId: excludeId);
   }
 
-  /// PART 18B — "Create promotions."
-  Future<void> createPromo(PromoModel promo) async {
-    await _datasource.createPromo(promo);
+  /// PART 19 — a fresh, unused promo id, generated up front so a
+  /// selected photo can be uploaded (keyed by this id) before
+  /// [createPromo] writes the document itself. See
+  /// [PromoDatasource.newPromoId].
+  String newPromoId() => _datasource.newPromoId();
+
+  /// PART 18B — "Create promotions." Returns the id the promo was
+  /// saved under (either [promo.id], if already set via [newPromoId],
+  /// or a fresh auto-id).
+  Future<String> createPromo(PromoModel promo) async {
+    final id = await _datasource.createPromo(promo);
     _cachedAll = null;
     _cachedVisible = null;
+    return id;
   }
 
   /// PART 18B — "Edit promotions" / "Deactivate promotions" (via a
   /// [PromoStatus] change on [updated]).
   Future<void> updatePromo(PromoModel updated) async {
     await _datasource.updatePromoFields(updated.id, updated.toEditableMap());
+    _cachedAll = null;
+    _cachedVisible = null;
+  }
+
+  /// PART 18B — "Delete promotions." Distinct from deactivating: the
+  /// document is permanently removed rather than just hidden, so it
+  /// can never be validated, browsed, or reactivated again.
+  Future<void> deletePromo(String id) async {
+    await _datasource.deletePromo(id);
     _cachedAll = null;
     _cachedVisible = null;
   }

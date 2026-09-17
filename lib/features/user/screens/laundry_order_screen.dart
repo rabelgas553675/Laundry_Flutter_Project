@@ -1,19 +1,30 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../app/constants.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
+import '../../../core/utils/price_calculator.dart';
 import '../../../core/widgets/detergent_selection.dart';
 import '../../../core/widgets/dropoff_info_card.dart';
 import '../../../core/widgets/laundry_item_selection.dart';
-    import '../../../core/widgets/location_selection.dart';
+import '../../../core/widgets/location_selection.dart';
+import '../../../core/widgets/service_selection.dart';
 import '../../../models/detergent_model.dart';
 import '../../../models/laundry_item_model.dart';
 import '../../../models/location_area_model.dart';
 import '../../../models/order_draft_model.dart';
+import '../../../models/order_item_model.dart';
+import '../../../models/promo_model.dart';
+import '../../../models/service_item_model.dart';
 import '../../../models/service_model.dart';
+import '../widgets/dry_cleaning_item_selection.dart';
+import '../widgets/order_item_card.dart';
+import '../widgets/order_service_header.dart';
+import '../widgets/special_instruction_field.dart';
 import 'order_summary_screen.dart';
 
 /// How the order gets to/from the customer. UI-only for now — PART 12
@@ -53,11 +64,20 @@ const Color _kBrandBlueLight = Color(0xff8EC5FC);
 /// for now — PART 11 adds price calculation, and PART 12 is the first
 /// part that actually saves anything to Firestore.
 class LaundryOrderScreen extends StatefulWidget {
-  const LaundryOrderScreen({super.key, this.initialService});
+  const LaundryOrderScreen({super.key, this.initialService, this.initialPromo});
 
   /// Optional pre-selected service — e.g. when the customer tapped a
   /// service directly from the dashboard's Quick Service Selection.
   final ServiceModel? initialService;
+
+  /// PART 3 — the promo the customer selected on the Offers screen
+  /// before starting this order (e.g. via "Order with this Promo"),
+  /// carried in here and, once the order form is complete, attached
+  /// to the resulting [OrderDraft.appliedPromo] so it survives all
+  /// the way to [OrderSummaryScreen] and order creation. `null` for
+  /// the normal case of starting an order without ever visiting the
+  /// Offers screen first.
+  final PromoModel? initialPromo;
 
   @override
   State<LaundryOrderScreen> createState() => _LaundryOrderScreenState();
@@ -76,13 +96,54 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
   ServiceModel? _selectedService;
   String? _serviceError;
 
-  // ---- Step 2: Laundry Items ----
+  // ---- Step 2: Laundry Items (non-itemized services) ----
   final Set<LaundryItemModel> _selectedItems = {};
   String? _itemsError;
 
-  // ---- Step 3: Weight ----
+  // ---- Step 2 (itemized branch): Dry Cleaning per-garment quantities ----
+  // PART 1/2 — `serviceType.isItemized` (currently just Dry Cleaning)
+  // is priced per garment instead of by weight, so it collects a
+  // quantity per catalog `ServiceItemModel` here instead of using
+  // `_selectedItems`/`_weightController` at all. Kept as a separate
+  // field, not folded into `_selectedItems`, for the same reason
+  // `OrderDraft.selectedItems` is kept separate from `OrderDraft.items`
+  // — see that class's doc comment.
+  final Map<ServiceItemModel, int> _selectedServiceItems = {};
+
+  // ---- Step 3: Weight / Quantity ----
   final _weightController = TextEditingController();
   String? _weightError;
+
+  // ---- Special Instructions (PART 1/2) ----
+  // Optional on every service — maps directly onto
+  // `OrderDraft.specialInstructions`.
+  final _specialInstructionsController = TextEditingController();
+
+  /// Part 2 (per-piece pricing) — the unit Step 3's field is actually
+  /// collecting, always read from the selected service (Part 1's
+  /// single source of truth) rather than guessed from its name. Falls
+  /// back to kilogram only in the brief moment before a service has
+  /// been picked at all (Step 3 is unreachable until Step 1 is valid,
+  /// so this fallback is never actually shown to the customer).
+  ServiceUnit get _weightUnit => _selectedService?.unit ?? ServiceUnit.kilogram;
+
+  /// PART 1/2 — whether the selected service prices per garment (Dry
+  /// Cleaning) rather than by weight/piece-count. Every step below
+  /// branches on this instead of comparing `service.name` against a
+  /// literal string, per `ServiceType.isItemized`.
+  bool get _isItemized => _selectedService?.serviceType.isItemized ?? false;
+
+  /// PART 3-adjacent helper needed by Step 3's read-only review:
+  /// Σ(quantity × price) across `_selectedServiceItems`. The real,
+  /// order-wide price breakdown (detergent fee, pickup fee, discount,
+  /// total) is still PART 3's `PriceCalculator` — this is only enough
+  /// to show the customer a running subtotal while they're still on
+  /// this form.
+  double get _itemizedSubtotal {
+    var sum = 0.0;
+    _selectedServiceItems.forEach((item, quantity) => sum += item.price * quantity);
+    return sum;
+  }
 
   // ---- Step 4: Detergent ----
   DetergentModel? _selectedDetergent;
@@ -103,15 +164,33 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
   String? _pickupLandmarkError;
   String? _pickupLocationError;
 
+  // ---- Applied Promo (carried in from OffersScreen, if any) ----
+  // PART 3 fix — this used to be read from `widget.initialPromo` in
+  // doc comments only and never actually stored anywhere, so every
+  // order was built with `discount: 0` no matter what. Now it's real
+  // mutable state: seeded from `widget.initialPromo` on entry, and
+  // can be cleared by the customer via the banner's "Remove" action
+  // without leaving this screen.
+  PromoModel? _appliedPromo;
+
   @override
   void initState() {
     super.initState();
     _selectedService = widget.initialService;
+    _appliedPromo = widget.initialPromo;
+  }
+
+  /// Lets the customer drop the promo they arrived with, e.g. if they
+  /// change their mind mid-order. Never touches Firestore — this is
+  /// purely local screen state until the order is actually placed.
+  void _removeAppliedPromo() {
+    setState(() => _appliedPromo = null);
   }
 
   @override
   void dispose() {
     _weightController.dispose();
+    _specialInstructionsController.dispose();
     _pickupAddressController.dispose();
     _pickupPhoneController.dispose();
     _pickupLandmarkController.dispose();
@@ -130,6 +209,18 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
   }
 
   bool _validateItems() {
+    // PART 2 — Dry Cleaning (and any other itemized service):
+    // validated against the quantity map instead of `_selectedItems`.
+    if (_isItemized) {
+      final hasAnyQuantity = _selectedServiceItems.values.any((quantity) => quantity > 0);
+      if (!hasAnyQuantity) {
+        setState(() => _itemsError = 'Select at least one item and its quantity.');
+        return false;
+      }
+      setState(() => _itemsError = null);
+      return true;
+    }
+
     if (_selectedItems.isEmpty) {
       setState(() => _itemsError = 'Select at least one laundry item.');
       return false;
@@ -139,14 +230,45 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
   }
 
   bool _validateWeight() {
-    final raw = _weightController.text.trim();
-    final parsed = double.tryParse(raw);
-    if (raw.isEmpty || parsed == null || parsed <= 0) {
-      setState(() => _weightError = 'Enter a valid weight in kg (greater than 0).');
-      return false;
+    // PART 2 — Dry Cleaning is priced per garment (validated on Step
+    // 2 by `_validateItems`, since quantity > 0 per selected garment
+    // is exactly what "quantity must be greater than 0" means here),
+    // not by weight — Step 3 becomes a read-only review for it, so
+    // there is nothing further to validate.
+    if (_isItemized) {
+      setState(() => _weightError = null);
+      return true;
     }
-    setState(() => _weightError = null);
-    return true;
+
+    // Part 2 (per-piece pricing) — unit-aware validation, delegated
+    // entirely to `ServiceUnitValidation` (Part 1's single source of
+    // truth) so this never drifts from `order_summary_screen.dart`'s
+    // independent re-check of the same field. A piece service rejects
+    // anything but a whole number > 0 with "Please enter a whole
+    // number of pieces."; a kg service keeps the existing
+    // decimal-friendly rule.
+    final raw = _weightController.text.trim();
+    final error = ServiceUnitValidation.validateQuantityInput(_weightUnit, raw);
+    setState(() => _weightError = error);
+    return error == null;
+  }
+
+  /// Step 3's subtitle once the customer has typed something —
+  /// `"3 pcs"` / `"1 pc"` for a piece service, `"2.5 kg"` for a kg
+  /// one, always through `ServiceUnitFormat` (never a hand-rolled
+  /// `'$text kg'`). Falls back to the raw text while it isn't yet a
+  /// parsable number (e.g. mid-typing `"1."` ), so the subtitle never
+  /// just disappears while the customer is still entering a value.
+  Widget? _weightStepSubtitle() {
+    if (_isItemized) {
+      final count = _selectedServiceItems.values.fold<int>(0, (a, b) => a + b);
+      if (count == 0) return null;
+      return Text('$count item(s) · ${PriceCalculator.formatCurrency(_itemizedSubtotal)}');
+    }
+    final raw = _weightController.text.trim();
+    if (raw.isEmpty) return null;
+    final parsed = double.tryParse(raw);
+    return Text(parsed != null ? ServiceUnitFormat.formatQuantity(_weightUnit, parsed) : raw);
   }
 
   bool _validateDetergent() {
@@ -290,10 +412,27 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
   void _proceedToOrderSummary() {
     final isPickup = _deliveryMethod == DeliveryMethod.pickup;
 
+    // PART 1/2 — Dry Cleaning builds its priced garment lines
+    // (`OrderItemModel.priced`, carrying each item's id/price at the
+    // moment of ordering) from the Step 2 quantity map. Every other
+    // service keeps using `_selectedItems`/`_weightController`
+    // exactly as before — `selectedItems` stays empty for them, same
+    // as `OrderDraft.selectedItems`'s doc comment describes.
+    final selectedServiceItems = _isItemized
+        ? [
+            for (final entry in _selectedServiceItems.entries)
+              if (entry.value > 0)
+                OrderItemModel.priced(catalogItem: entry.key, quantity: entry.value),
+          ]
+        : const <OrderItemModel>[];
+
+    final specialInstructions = _specialInstructionsController.text.trim();
+
     final order = OrderDraft(
       service: _selectedService!,
-      items: _selectedItems,
-      weightKg: double.parse(_weightController.text.trim()),
+      items: _isItemized ? const {} : _selectedItems,
+      selectedItems: selectedServiceItems,
+      weightKg: _isItemized ? 0 : double.parse(_weightController.text.trim()),
       detergent: _selectedDetergent!,
       deliveryMethod: _deliveryMethod!,
       pickupAddress: isPickup ? _pickupAddressController.text.trim() : null,
@@ -301,10 +440,35 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
       pickupLandmark: isPickup ? _pickupLandmarkController.text.trim() : null,
       pickupLocation: isPickup ? _selectedLocationArea : null,
       pickupFee: isPickup ? AppConstants.pickupFee : 0,
-      // PART 18 is what actually introduces promo codes — no discount
-      // exists yet on the order form, so this is always 0 for now.
-      discount: 0,
+      // PART 3 fix — attach whatever promo the customer selected on
+      // the Offers screen (or picked up mid-form). `OrderDraft`
+      // resolves the actual discount amount itself via
+      // `resolvedDiscount` (== `appliedPromo!.discountFor(baseSubtotal)`
+      // once a promo is attached), so nothing needs to be computed
+      // here — just pass the promo through. `discount` stays at its
+      // default (0) since a promo, not a flat number, is the only way
+      // to get a discount from this form.
+      appliedPromo: _appliedPromo,
+      specialInstructions: specialInstructions.isEmpty ? null : specialInstructions,
     );
+
+    // PART 6 — final defense-in-depth check via `OrderDraft.validate()`
+    // (the single, pure source of truth for "is this draft actually
+    // valid" — see its doc comment), run one more time on the fully
+    // assembled draft right before it leaves this screen. The five
+    // step-by-step validators above should already have caught
+    // everything by the time we get here, so in normal use this list
+    // is always empty — but it also covers rules those per-step
+    // validators have no step for at all (e.g. "discount can't be
+    // negative", since Part 18 is what actually introduces discounts
+    // to this form), so this is not purely redundant.
+    final validationErrors = order.validate();
+    if (validationErrors.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(validationErrors.first)),
+      );
+      return;
+    }
 
     Navigator.of(context).push<void>(
       MaterialPageRoute(builder: (context) => OrderSummaryScreen(order: order)),
@@ -366,7 +530,23 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
           SafeArea(
             child: Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: ClipRRect(
+              child: Column(
+                children: [
+                  // PART 3 — visible confirmation that a promo carried
+                  // over from the Offers screen is actually attached
+                  // to this order, with a one-tap way to drop it
+                  // without leaving the form. Purely local UI state
+                  // (`_appliedPromo`) — nothing here touches Firestore.
+                  if (_appliedPromo != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                      child: _AppliedPromoBanner(
+                        promo: _appliedPromo!,
+                        onRemove: _removeAppliedPromo,
+                      ),
+                    ),
+                  Expanded(
+                    child: ClipRRect(
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(28),
                   topRight: Radius.circular(28),
@@ -471,12 +651,23 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
                           ),
                         ),
 
-                        // ---- Step 2: Laundry Items ----
+                        // ---- Step 2: Items ----
+                        // PART 2 — branches on `_isItemized`: Dry
+                        // Cleaning (and any other per-garment service)
+                        // shows `DryCleaningItemSelection`'s
+                        // `[-] N [+]` steppers over its own catalog;
+                        // every other service keeps the existing
+                        // `LaundryItemSelection` checklist unchanged.
                         Step(
-                          title: const Text('Select Laundry Items'),
-                          subtitle: _selectedItems.isNotEmpty
-                              ? Text('${_selectedItems.length} item(s) selected')
-                              : null,
+                          title: Text(_isItemized ? 'Select Items' : 'Select Laundry Items'),
+                          subtitle: _isItemized
+                              ? (_selectedServiceItems.values.any((q) => q > 0)
+                                  ? Text(
+                                      '${_selectedServiceItems.values.fold<int>(0, (a, b) => a + b)} item(s) selected')
+                                  : null)
+                              : (_selectedItems.isNotEmpty
+                                  ? Text('${_selectedItems.length} item(s) selected')
+                                  : null),
                           isActive: _currentStep >= 1,
                           state: _currentStep > 1
                               ? StepState.complete
@@ -484,17 +675,34 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
                           content: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              LaundryItemSelection(
-                                selected: _selectedItems,
-                                onChanged: (items) {
-                                  setState(() {
-                                    _selectedItems
-                                      ..clear()
-                                      ..addAll(items);
-                                    _itemsError = null;
-                                  });
-                                },
-                              ),
+                              if (_selectedService != null)
+                                OrderServiceHeader(service: _selectedService!),
+                              if (_isItemized)
+                                DryCleaningItemSelection(
+                                  serviceId: _selectedService!.id,
+                                  serviceType: _selectedService!.serviceType,
+                                  selected: _selectedServiceItems,
+                                  onChanged: (updated) {
+                                    setState(() {
+                                      _selectedServiceItems
+                                        ..clear()
+                                        ..addAll(updated);
+                                      _itemsError = null;
+                                    });
+                                  },
+                                )
+                              else
+                                LaundryItemSelection(
+                                  selected: _selectedItems,
+                                  onChanged: (items) {
+                                    setState(() {
+                                      _selectedItems
+                                        ..clear()
+                                        ..addAll(items);
+                                      _itemsError = null;
+                                    });
+                                  },
+                                ),
                               if (_itemsError != null) ...[
                                 const SizedBox(height: 8),
                                 Text(_itemsError!, style: TextStyle(color: colors.error)),
@@ -503,40 +711,100 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
                           ),
                         ),
 
-                        // ---- Step 3: Weight ----
+                        // ---- Step 3: Weight / Quantity ----
+                        // Part 2 (per-piece pricing) — every piece of
+                        // copy below (title, subtitle, field label,
+                        // hint, keyboard) comes from `_weightUnit`
+                        // instead of assuming every service is
+                        // kg-based, so Dry Cleaning / Wash & Ironing
+                        // read "Enter Quantity" / "Quantity (pcs)" /
+                        // "3 pcs" here, while kg services keep reading
+                        // exactly what they did before this feature.
+                        // ---- Step 3: Weight / Quantity, or (itemized) Review Items ----
+                        // PART 2/3-adjacent — Dry Cleaning has nothing
+                        // left to enter here (its quantities were
+                        // already picked in Step 2), so this becomes a
+                        // read-only review of the chosen garments and
+                        // their running subtotal instead of a weight
+                        // field. The full order-wide total (with
+                        // detergent fee, pickup fee, discount) is
+                        // still computed on the summary screen by
+                        // PART 3's `PriceCalculator`.
                         Step(
-                          title: const Text('Enter Weight'),
-                          subtitle: _weightController.text.trim().isNotEmpty
-                              ? Text('${_weightController.text.trim()} kg')
-                              : null,
+                          title: Text(_isItemized
+                              ? 'Review Items'
+                              : (_weightUnit.isPiece ? 'Enter Quantity' : 'Enter Weight')),
+                          subtitle: _weightStepSubtitle(),
                           isActive: _currentStep >= 2,
                           state: _currentStep > 2
                               ? StepState.complete
                               : (_currentStep == 2 ? StepState.indexed : StepState.disabled),
-                          content: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              AppTextField(
-                                label: 'Weight (kg)',
-                                hint: 'e.g. 5.0',
-                                controller: _weightController,
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(decimal: true),
-                                prefixIcon: Icons.scale_outlined,
-                                onChanged: (_) {
-                                  // Always rebuild so the step subtitle
-                                  // stays in sync as the customer types,
-                                  // clearing any previous validation
-                                  // error along the way.
-                                  setState(() => _weightError = null);
-                                },
-                              ),
-                              if (_weightError != null) ...[
-                                const SizedBox(height: 8),
-                                Text(_weightError!, style: TextStyle(color: colors.error)),
-                              ],
-                            ],
-                          ),
+                          content: _isItemized
+                              ? Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (_selectedServiceItems.values.every((q) => q <= 0))
+                                      Text(
+                                        'Go back to Select Items to add garments.',
+                                        style: TextStyle(color: colors.onSurfaceVariant),
+                                      )
+                                    else ...[
+                                      for (final entry in _selectedServiceItems.entries)
+                                        if (entry.value > 0)
+                                          OrderItemCard(item: entry.key, quantity: entry.value),
+                                      const Divider(height: 24),
+                                      Row(
+                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Text(
+                                            'Subtotal',
+                                            style: TextStyle(fontWeight: FontWeight.w700),
+                                          ),
+                                          Text(
+                                            PriceCalculator.formatCurrency(_itemizedSubtotal),
+                                            style: const TextStyle(fontWeight: FontWeight.w700),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ],
+                                )
+                              : Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    AppTextField(
+                                      label:
+                                          _weightUnit.isPiece ? 'Quantity (pcs)' : 'Weight (kg)',
+                                      hint: _weightUnit.isPiece ? 'e.g. 3' : 'e.g. 5.0',
+                                      controller: _weightController,
+                                      keyboardType: TextInputType.numberWithOptions(
+                                        decimal: !_weightUnit.isPiece,
+                                      ),
+                                      // Part 2 — belt-and-suspenders with
+                                      // `_validateWeight`: a piece service
+                                      // can't even type a decimal point in
+                                      // the first place, rather than relying
+                                      // solely on catching it at validation.
+                                      inputFormatters: _weightUnit.isPiece
+                                          ? [FilteringTextInputFormatter.digitsOnly]
+                                          : null,
+                                      prefixIcon: _weightUnit.isPiece
+                                          ? Icons.checkroom_outlined
+                                          : Icons.scale_outlined,
+                                      onChanged: (_) {
+                                        // Always rebuild so the step subtitle
+                                        // stays in sync as the customer types,
+                                        // clearing any previous validation
+                                        // error along the way.
+                                        setState(() => _weightError = null);
+                                      },
+                                    ),
+                                    if (_weightError != null) ...[
+                                      const SizedBox(height: 8),
+                                      Text(_weightError!, style: TextStyle(color: colors.error)),
+                                    ],
+                                  ],
+                                ),
                         ),
 
                         // ---- Step 4: Detergent ----
@@ -682,6 +950,15 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
                               // Drop-off info — only shown when Drop-off is chosen.
                               if (_deliveryMethod == DeliveryMethod.dropoff)
                                 const DropoffInfoCard(),
+
+                              // PART 1/2 — optional note, maps onto
+                              // `OrderDraft.specialInstructions`. Shown
+                              // for both Pickup and Drop-off, and
+                              // never required.
+                              const SizedBox(height: 16),
+                              SpecialInstructionField(
+                                controller: _specialInstructionsController,
+                              ),
                             ],
                           ),
                         ),
@@ -689,6 +966,9 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
                     ),
                   ),
                 ),
+              ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -865,6 +1145,59 @@ class _OrderScreenBackground extends StatelessWidget {
                   color: _kBrandBlueLight.withValues(alpha: 0.4),
                 ),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+/// PART 3 — a small dismissible banner shown above the order form's
+/// Stepper whenever a promo carried over from the Offers screen (or
+/// picked up mid-form) is attached to this order. Purely a visual
+/// confirmation + "change your mind" affordance — it never computes
+/// or displays a discount amount itself (that depends on the
+/// subtotal, which isn't known until later steps are filled in); see
+/// `_PriceSummaryCard` on `OrderSummaryScreen` for the actual peso
+/// figure once there's a subtotal to apply it to.
+class _AppliedPromoBanner extends StatelessWidget {
+  const _AppliedPromoBanner({required this.promo, required this.onRemove});
+
+  final PromoModel promo;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: colors.primaryContainer,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.local_offer, size: 18, color: colors.onPrimaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Promo applied: ${promo.code} — ${promo.discountLabel}',
+              style: textTheme.bodyMedium?.copyWith(
+                color: colors.onPrimaryContainer,
+                fontWeight: FontWeight.w700,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: 4),
+          InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: onRemove,
+            child: Padding(
+              padding: const EdgeInsets.all(4),
+              child: Icon(Icons.close, size: 18, color: colors.onPrimaryContainer),
             ),
           ),
         ],

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import '../../../core/services/auth_state.dart';
 import '../../../core/utils/js_conversion_error_unwrapper.dart';
 import '../../../core/utils/price_calculator.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/dropoff_info_card.dart';
@@ -14,6 +15,7 @@ import '../../../data/repositories/order_repository.dart';
 import '../../../data/services/notification_service.dart';
 import '../../../models/order_draft_model.dart';
 import '../../../models/order_model.dart';
+import '../widgets/order_items_breakdown.dart';
 
 /// Brand blue used across the app's glass UI (dashboard app bar/nav,
 /// the order form's Stepper shell). Kept local to this file, same as
@@ -83,11 +85,34 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   /// already did. Returns a human-readable message describing what's
   /// missing, or null if the draft is complete.
   static String? _validate(OrderDraft order) {
-    if (order.items.isEmpty) {
-      return 'No laundry items were found on this order. Please go back and select at least one.';
-    }
-    if (order.weightKg <= 0) {
-      return 'Order weight must be greater than 0 kg. Please go back and re-enter it.';
+    // PART 3 fix — an itemized draft (Dry Cleaning) never populates
+    // `order.items`/`order.weightKg` (it's priced from
+    // `order.selectedItems` instead — see `OrderDraft.items`'s doc
+    // comment), so checking those two fields for every draft meant
+    // this always returned an error for Dry Cleaning: "Confirm
+    // Order" could never actually succeed for it. Branch on
+    // `order.isItemized` and validate the fields that service type
+    // actually uses.
+    if (order.isItemized) {
+      if (order.selectedItems.isEmpty) {
+        return 'No items were selected for this order. Please go back and select at least one item.';
+      }
+      if (order.selectedItems.any((item) => item.quantity <= 0)) {
+        return 'Every selected item needs a quantity greater than 0. Please go back and check your items.';
+      }
+    } else {
+      if (order.items.isEmpty) {
+        return 'No laundry items were found on this order. Please go back and select at least one.';
+      }
+      // Part 2 (per-piece pricing) — unit-aware, and re-checks the
+      // whole-number rule independently of whatever the order form
+      // already validated (same reasoning as every other check in
+      // this method: this runs again here regardless). The actual
+      // rule lives in `ServiceUnitValidation`, never duplicated here.
+      final quantityError = ServiceUnitValidation.validateQuantityValue(order.unit, order.weightKg);
+      if (quantityError != null) {
+        return '$quantityError Please go back and re-enter it.';
+      }
     }
     if (order.isPickup) {
       if ((order.pickupAddress ?? '').trim().isEmpty) {
@@ -204,7 +229,11 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
         icon: const Icon(Icons.check_circle_outline, size: 40),
         title: const Text('Confirm this order?'),
         content: Text(
-          '${widget.order.service.name} · ${widget.order.weightKg.toStringAsFixed(1)} kg\n'
+          '${widget.order.service.name} · '
+          // PART 3 — an itemized order (Dry Cleaning) has nothing
+          // meaningful to show via `weightKg` (always 0 for these
+          // drafts); show the garment count instead of "0 pcs".
+          '${widget.order.isItemized ? '${widget.order.selectedItems.length} item type(s)' : ServiceUnitFormat.formatQuantity(widget.order.unit, widget.order.weightKg)}\n'
           '${widget.order.isPickup ? 'Pickup' : 'Drop-off'}\n\n'
           'Total: ${PriceCalculator.formatCurrency(breakdown.total)}',
         ),
@@ -372,12 +401,26 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
   /// rounded white sheet for contrast. [context] here already carries
   /// the blue-primary [Theme] override from [build].
   Widget _buildShell(BuildContext context) {
+    // PART 3 fix — a Dry Cleaning draft (`order.isItemized`) is
+    // priced from `order.itemsSubtotal` (Σ quantity × item price),
+    // never from `service.pricePerKg × weightKg` (which is always 0
+    // for an itemized draft, since it isn't priced by weight at
+    // all). Every other service keeps pricing the original way.
     final breakdown = PriceCalculator.calculate(
       servicePricePerKg: widget.order.service.pricePerKg,
       weightKg: widget.order.weightKg,
+      itemsSubtotal: widget.order.isItemized ? widget.order.itemsSubtotal : null,
       detergentFee: widget.order.detergent.additionalPrice,
       pickupFee: widget.order.pickupFee,
-      discount: widget.order.discount,
+      // PART 3 fix — this used to read `widget.order.discount`, the
+      // legacy flat field that's always 0 once a promo is attached
+      // (see `OrderDraft.resolvedDiscount`'s doc comment). That meant
+      // a customer who selected a promo on the Offers screen saw it
+      // silently vanish here: no discount row, wrong total. Reading
+      // `resolvedDiscount` instead always reflects `appliedPromo` when
+      // one is set, and falls back to the flat `discount` field when
+      // it isn't — so this is a strict superset of the old behavior.
+      discount: widget.order.resolvedDiscount,
     );
 
     return Scaffold(
@@ -688,26 +731,61 @@ class _OrderDetailsCard extends StatelessWidget {
           const SizedBox(height: 8),
           _SummaryRow(
             label: 'Service',
-            value: '${order.service.name} (₱${order.service.pricePerKg.toStringAsFixed(0)}/kg)',
+            value: order.isItemized
+                ? order.service.name
+                : '${order.service.name} '
+                    '(${ServiceUnitFormat.formatPricePerUnit(order.unit, '₱${order.service.pricePerKg.toStringAsFixed(0)}')})',
           ),
           const SizedBox(height: 4),
-          Text(
-            'Laundry Items',
-            style: textTheme.bodyMedium?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+          // PART 3 — Dry Cleaning (`order.isItemized`) has no single
+          // "weight" to show; it's priced per garment, so show the
+          // `2 × Suit  ₱300` style breakdown instead of the Chips +
+          // weight row every other service uses.
+          if (order.isItemized) ...[
+            Text(
+              'Items',
+              style: textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: order.items
-                .map((item) => Chip(label: Text(item.name), visualDensity: VisualDensity.compact))
-                .toList(),
-          ),
-          const SizedBox(height: 4),
-          _SummaryRow(label: 'Weight', value: '${order.weightKg.toStringAsFixed(1)} kg'),
+            const SizedBox(height: 6),
+            OrderItemsBreakdown(items: order.selectedItems),
+          ] else ...[
+            Text(
+              'Laundry Items',
+              style: textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: order.items
+                  .map((item) => Chip(label: Text(item.name), visualDensity: VisualDensity.compact))
+                  .toList(),
+            ),
+            const SizedBox(height: 4),
+            _SummaryRow(
+              // "Weight" for a kg-based service, "Quantity" for a
+              // piece-based one — never hard-coded, per Part 1's
+              // `ServiceUnit.quantityFieldLabel`.
+              label: order.unit.quantityFieldLabel,
+              value: ServiceUnitFormat.formatQuantity(order.unit, order.weightKg),
+            ),
+          ],
           _SummaryRow(label: 'Detergent', value: order.detergent.name),
+          if ((order.specialInstructions ?? '').trim().isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Special Instructions',
+              style: textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(order.specialInstructions!.trim(), style: textTheme.bodyMedium),
+          ],
         ],
       ),
     );
@@ -775,12 +853,29 @@ class _PriceSummaryCard extends StatelessWidget {
         children: [
           Text('Price Summary', style: textTheme.titleMedium),
           const SizedBox(height: 8),
-          _SummaryRow(
-            label:
-                'Subtotal (₱${order.service.pricePerKg.toStringAsFixed(0)}/kg × '
-                '${order.weightKg.toStringAsFixed(1)} kg)',
-            value: PriceCalculator.formatCurrency(breakdown.subtotal),
-          ),
+          if (order.isItemized) ...[
+            // PART 3 — Dry Cleaning: the per-garment breakdown was
+            // already shown in full on `_OrderDetailsCard` above, so
+            // this just carries the already-summed subtotal forward
+            // into the running total, with a plain "Subtotal" label
+            // instead of a "₱150/pc × 0 pcs"-style one that would be
+            // meaningless for an itemized order.
+            _SummaryRow(
+              label: 'Subtotal '
+                  '(${order.selectedItems.length} item type${order.selectedItems.length == 1 ? '' : 's'})',
+              value: PriceCalculator.formatCurrency(breakdown.subtotal),
+            ),
+          ] else
+            _SummaryRow(
+              // e.g. "Subtotal (₱150/pc × 3 pcs)" for a piece
+              // service, "Subtotal (₱80/kg × 3 kg)" for a kg-based
+              // one — built entirely through `ServiceUnitFormat`,
+              // never hard-coded "/kg" here.
+              label: 'Subtotal '
+                  '(${ServiceUnitFormat.formatPricePerUnit(order.unit, '₱${order.service.pricePerKg.toStringAsFixed(0)}')} × '
+                  '${ServiceUnitFormat.formatQuantity(order.unit, order.weightKg)})',
+              value: PriceCalculator.formatCurrency(breakdown.subtotal),
+            ),
           _SummaryRow(
             label: 'Detergent Fee',
             value: PriceCalculator.formatCurrency(breakdown.detergentFee),
@@ -789,6 +884,18 @@ class _PriceSummaryCard extends StatelessWidget {
             _SummaryRow(
               label: 'Pickup Fee',
               value: PriceCalculator.formatCurrency(breakdown.pickupFee),
+            ),
+          // PART 3 — "Promo: 20% OFF" line, shown whenever a promo is
+          // actually attached to this draft (regardless of whether it
+          // ends up affecting the total — a below-minimum-order promo
+          // still shows here so the customer sees it's attached, with
+          // the Discount row below making clear it isn't taking
+          // anything off yet).
+          if (order.appliedPromo != null)
+            _SummaryRow(
+              label: 'Promo (${order.appliedPromo!.code})',
+              value: order.appliedPromo!.discountLabel,
+              valueColor: colors.primary,
             ),
           if (breakdown.discount > 0)
             _SummaryRow(

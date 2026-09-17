@@ -14,6 +14,16 @@
 // other three top-level category tiles on ExploreServicesScreen).
 // Adjust _kBundleKeywords / _isExcluded below if your Firestore names
 // differ.
+//
+// REDESIGN — matches ExploreServicesScreen's glass treatment: same
+// blurred-blob background (`_BundleBackground`) and frosted app bar
+// (`_BundleGlassAppBar`) as UserDashboard/ExploreServicesScreen, so
+// the whole "Explore Services -> Service Bundle" navigation chain
+// reads as one continuous surface. Also fixes a leftover bug where
+// this screen's AppBar title said "Explore Services" (copy-pasted
+// from that screen) instead of "Service Bundle".
+
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -24,6 +34,12 @@ import '../../../core/widgets/service_grid_card.dart';
 import '../../../data/repositories/service_repository.dart';
 import '../../../models/service_model.dart';
 import '../../user/screens/laundry_order_screen.dart';
+
+/// Same fixed app-bar content height as ExploreServicesScreen/
+/// UserDashboard — kept as its own local constant so this file stays
+/// self-contained rather than importing a private value from another
+/// screen.
+const double _kAppBarContentHeight = 64;
 
 /// Keywords (checked in this order) that identify a bundle service and
 /// also control the display order of the grid: Quick Wash, then
@@ -115,69 +131,280 @@ class _ServiceBundleScreenState extends State<ServiceBundleScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final statusBarInset = MediaQuery.paddingOf(context).top;
+    final appBarTotalHeight = statusBarInset + _kAppBarContentHeight;
+
     return Scaffold(
-      // Back arrow is automatic here since this screen is always
-      // reached via Navigator.push — no extra wiring needed.
-      appBar: AppBar(title: const Text('Explore Services')),
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _refresh,
-          child: CustomScrollView(
-            slivers: [
-              if (_isLoading)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: LoadingWidget(message: 'Loading services...'),
-                )
-              else if (_error != null)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 48),
-                    child: ErrorState(
-                      message: 'We couldn\'t load our services. Please try again.',
-                      onRetry: _refresh,
-                    ),
+      backgroundColor: Colors.transparent,
+      extendBody: true,
+      extendBodyBehindAppBar: true,
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(appBarTotalHeight),
+        child: _BundleGlassAppBar(
+          // BUG FIX — was hardcoded 'Explore Services', a copy-paste
+          // leftover from that screen. This one is Service Bundle.
+          title: 'Service Bundle',
+          onBack: () => Navigator.maybePop(context),
+        ),
+      ),
+      body: Stack(
+        children: [
+          const Positioned.fill(child: _BundleBackground()),
+          SafeArea(
+            top: false,
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: SizedBox(height: appBarTotalHeight + 8),
                   ),
-                )
-              else if (_bundleServices.isEmpty)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 48),
-                    child: EmptyState(
-                      icon: Icons.local_laundry_service_outlined,
-                      title: 'No services available right now',
-                      message: 'Check back soon for our laundry services.',
+                  if (_isLoading)
+                    const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: LoadingWidget(message: 'Loading services...'),
+                    )
+                  else if (_error != null)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 48),
+                        child: ErrorState(
+                          message: 'We couldn\'t load our services. Please try again.',
+                          onRetry: _refresh,
+                        ),
+                      ),
+                    )
+                  else if (_bundleServices.isEmpty)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 48),
+                        child: EmptyState(
+                          icon: Icons.local_laundry_service_outlined,
+                          title: 'No services available right now',
+                          message: 'Check back soon for our laundry services.',
+                        ),
+                      ),
+                    )
+                  else
+                    // 2-column grid. With exactly 3 items, GridView leaves
+                    // the 3rd card alone on row 2, aligned to the left —
+                    // matching the reference image with no extra code needed.
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                      sliver: SliverGrid(
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 14,
+                          crossAxisSpacing: 14,
+                          childAspectRatio: 0.72,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final service = _bundleServices[index];
+                            return ServiceGridCard(
+                              service: service,
+                              onTap: () => _openService(service),
+                            );
+                          },
+                          childCount: _bundleServices.length,
+                        ),
+                      ),
                     ),
-                  ),
-                )
-              else
-                // 2-column grid. With exactly 3 items, GridView leaves
-                // the 3rd card alone on row 2, aligned to the left —
-                // matching the reference image with no extra code needed.
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-                  sliver: SliverGrid(
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      mainAxisSpacing: 14,
-                      crossAxisSpacing: 14,
-                      childAspectRatio: 0.72,
-                    ),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final service = _bundleServices[index];
-                        return ServiceGridCard(
-                          service: service,
-                          onTap: () => _openService(service),
-                        );
-                      },
-                      childCount: _bundleServices.length,
-                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Same three-blob blurred backdrop as ExploreServicesScreen's
+/// `_ExploreBackground` / UserDashboard's `_DashboardBackground`.
+class _BundleBackground extends StatelessWidget {
+  const _BundleBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xfff4f6fb),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: -90,
+            right: -70,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xff0D47A1), Color(0xffB3E5FC)],
                   ),
                 ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 260,
+            left: -90,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xff0D47A1).withValues(alpha: 0.55),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -60,
+            right: -50,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xff8EC5FC).withValues(alpha: 0.45),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Same frosted-glass app bar recipe as ExploreServicesScreen's
+/// `_ExploreGlassAppBar` — back arrow leading, blurred semi-
+/// transparent fill, rounded bottom corners.
+class _BundleGlassAppBar extends StatelessWidget {
+  const _BundleGlassAppBar({required this.title, required this.onBack});
+
+  final String title;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(24),
+        bottomRight: Radius.circular(24),
+      ),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.18),
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(24),
+              bottomRight: Radius.circular(24),
+            ),
+            border: Border(
+              bottom: BorderSide(
+                color: Colors.white.withValues(alpha: 0.5),
+                width: 1,
+              ),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: colorScheme.primary.withValues(alpha: 0.10),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
             ],
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: SizedBox(
+              height: _kAppBarContentHeight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 18, 0),
+                child: Row(
+                  children: [
+                    _BundleGlassIconButton(
+                      icon: Icons.arrow_back_ios_new_rounded,
+                      tooltip: 'Back',
+                      onPressed: onBack,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Same frosted circular icon button recipe as
+/// ExploreServicesScreen's `_ExploreGlassIconButton`.
+class _BundleGlassIconButton extends StatelessWidget {
+  const _BundleGlassIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(100),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.25),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            tooltip: tooltip,
+            icon: Icon(icon, color: Colors.black87, size: 17),
+            onPressed: onPressed,
           ),
         ),
       ),

@@ -10,6 +10,7 @@ import '../../../core/widgets/error_state.dart';
 import '../../../core/widgets/loading_widget.dart';
 import '../../../data/repositories/promo_repository.dart';
 import '../../../models/promo_model.dart';
+import 'laundry_order_screen.dart';
 
 /// PART 18A — the user-side Offers & Promotion system.
 ///
@@ -124,6 +125,21 @@ class _OffersScreenState extends State<OffersScreen> {
     _applyCode();
   }
 
+  /// PART 3 — "Order with this Promo": the actual
+  /// Dashboard → Offers → Select Offer → Laundry Order handoff. Pushes
+  /// straight into the order form with [promo] already attached via
+  /// `LaundryOrderScreen.initialPromo`, so the customer picks a
+  /// service as normal and the promo rides along through the whole
+  /// order → checkout → order summary flow from here on, with no
+  /// separate "re-enter the code" step.
+  void _orderWithPromo(PromoModel promo) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LaundryOrderScreen(initialPromo: promo),
+      ),
+    );
+  }
+
   Widget _buildBody() {
     return RefreshIndicator(
       onRefresh: _refresh,
@@ -176,6 +192,7 @@ class _OffersScreenState extends State<OffersScreen> {
                           child: _PromoCard(
                             promo: promo,
                             onUseCode: () => _useCode(promo.code),
+                            onOrderWithPromo: () => _orderWithPromo(promo),
                           ),
                         ))
                     .toList(),
@@ -373,10 +390,20 @@ class _AmountRow extends StatelessWidget {
 /// for, and a shortcut to load it straight into the redeem field
 /// above.
 class _PromoCard extends StatelessWidget {
-  const _PromoCard({required this.promo, required this.onUseCode});
+  const _PromoCard({
+    required this.promo,
+    required this.onUseCode,
+    required this.onOrderWithPromo,
+  });
 
   final PromoModel promo;
   final VoidCallback onUseCode;
+
+  /// PART 3 — "Order with this Promo". Separate from [onUseCode]:
+  /// that one just previews the discount against a typed-in subtotal
+  /// right here on this screen, this one actually starts a real order
+  /// with the promo attached.
+  final VoidCallback onOrderWithPromo;
 
   String _formatDate(DateTime date) {
     const months = [
@@ -395,6 +422,20 @@ class _PromoCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // PART 18A follow-up — same photo-led treatment as the
+          // home tab's [_PromoOfferCard] (offer_card.dart): the
+          // admin-uploaded photo from [PromoModel.imageUrl] as the
+          // card's visual, cropped (never stretched) to a fixed
+          // aspect ratio, with a graceful tinted-icon fallback when
+          // no photo has been uploaded yet — never a fake/stock photo.
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: _PromoCardPhoto(promo: promo),
+            ),
+          ),
+          const SizedBox(height: 12),
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -450,18 +491,85 @@ class _PromoCard extends StatelessWidget {
             style: textTheme.bodySmall,
           ),
           const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerRight,
-            child: OutlinedButton.icon(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: promo.code));
-                onUseCode();
-              },
-              icon: const Icon(Icons.copy_outlined, size: 16),
-              label: const Text('Use this code'),
-            ),
+          // Wrap (not Row) so "Use this code" and "Order with this
+          // Promo" gracefully drop to a second line on narrow screens
+          // instead of overflowing the card horizontally.
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: promo.code));
+                  onUseCode();
+                },
+                icon: const Icon(Icons.copy_outlined, size: 16),
+                label: const Text('Use this code'),
+              ),
+              FilledButton.icon(
+                onPressed: onOrderWithPromo,
+                icon: const Icon(Icons.local_laundry_service_outlined, size: 16),
+                label: const Text('Order with this Promo'),
+              ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The promo's photo for [_PromoCard], or a graceful (non-fake)
+/// fallback tile when [PromoModel.imageUrl] hasn't been set yet, or
+/// fails to load. Same behavior as [_PromoPhoto] in offer_card.dart
+/// (private to that file, so duplicated here rather than imported) —
+/// kept in its own widget for the same reason: isolating
+/// Image.network's loading/error states to just the photo itself.
+class _PromoCardPhoto extends StatelessWidget {
+  const _PromoCardPhoto({required this.promo});
+
+  final PromoModel promo;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    if (!promo.hasImage) {
+      return _fallback(colors);
+    }
+
+    return Image.network(
+      promo.imageUrl!,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => _fallback(colors),
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        return Container(
+          color: colors.primaryContainer.withValues(alpha: 0.4),
+          child: const Center(
+            child: SizedBox(
+              height: 20,
+              width: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _fallback(ColorScheme colors) {
+    // Deliberately just a tinted tile + icon — never a stock/placeholder
+    // photo — so a promo with no uploaded photo stays visibly distinct
+    // from one that has a real photo behind it.
+    return Container(
+      color: colors.primaryContainer.withValues(alpha: 0.55),
+      alignment: Alignment.center,
+      child: Icon(
+        Icons.local_offer_outlined,
+        size: 36,
+        color: colors.onPrimaryContainer.withValues(alpha: 0.7),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/price_calculator.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../models/order_model.dart';
 
 /// PART 13 — a single row in "My Orders": order number, service,
@@ -86,7 +87,24 @@ class OrderListTile extends StatelessWidget {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      '${order.serviceName} · ${order.weight.toStringAsFixed(1)} kg',
+                                      // PART 3/5 fix — an itemized
+                                      // (Dry Cleaning) order's
+                                      // `weight` is always 0 (it's
+                                      // priced per garment, not by
+                                      // weight — see
+                                      // `OrderRepository.createOrder`),
+                                      // so running it through
+                                      // `formatQuantity` would show
+                                      // every Dry Cleaning order as
+                                      // "Dry Cleaning · 0 pcs". Show
+                                      // the garment count instead,
+                                      // matching the same fix already
+                                      // applied in
+                                      // `order_summary_screen.dart`'s
+                                      // confirm dialog and
+                                      // `order_details_screen.dart`.
+                                      '${order.serviceName} · '
+                                      '${order.isItemized ? '${order.items.length} item type(s)' : ServiceUnitFormat.formatQuantity(order.serviceUnit, order.weight)}',
                                       style: textTheme.bodyMedium?.copyWith(
                                         color: Colors.black54,
                                       ),

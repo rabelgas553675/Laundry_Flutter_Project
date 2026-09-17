@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/price_calculator.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../models/order_model.dart';
+import '../widgets/order_items_breakdown.dart';
 import '../widgets/order_list_tile.dart' show OrderStatusStyle, formatOrderDate;
 import '../widgets/order_status_tracker.dart';
 
@@ -139,22 +141,50 @@ class _OrderInfoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final colors = Theme.of(context).colorScheme;
+
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Order Details', style: Theme.of(context).textTheme.titleMedium),
+          Text('Order Details', style: textTheme.titleMedium),
           const SizedBox(height: 8),
           _Row(label: 'Order Number', value: order.orderNumber),
           _Row(label: 'Service', value: order.serviceName),
-          _Row(label: 'Weight', value: '${order.weight.toStringAsFixed(1)} kg'),
+          // PART 3 — a Dry Cleaning order (`order.isItemized`) was
+          // priced per garment, not by weight/piece-count: showing
+          // `order.weight` here would just be "0 pcs" (that field is
+          // never set for an itemized order — see
+          // `OrderRepository.createOrder`). Show the itemized
+          // `2 × Suit  ₱300` breakdown instead, same widget/format as
+          // the pre-confirm Order Summary screen used.
+          if (order.isItemized) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Items',
+              style: textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 6),
+            OrderItemsBreakdown(items: order.items),
+          ] else
+            // The unit this order was actually placed under
+            // (`order.serviceUnit`), not the service's current
+            // configuration, so a historical order keeps showing
+            // exactly what the customer ordered.
+            _Row(
+              label: order.serviceUnit.quantityFieldLabel,
+              value: ServiceUnitFormat.formatQuantity(order.serviceUnit, order.weight),
+            ),
           if (order.detergentName.isNotEmpty)
             _Row(label: 'Detergent', value: order.detergentName),
-          if (order.items.isNotEmpty)
+          if (!order.isItemized && order.items.isNotEmpty)
             _Row(
               label: 'Laundry Items',
               value: order.items.map((item) => item.itemName).join(', '),
             ),
+          if (order.specialInstructions != null && order.specialInstructions!.trim().isNotEmpty)
+            _Row(label: 'Special Instructions', value: order.specialInstructions!),
           _Row(label: 'Placed On', value: formatOrderDate(order.createdAt)),
           _Row(label: 'Last Updated', value: formatOrderDate(order.updatedAt)),
         ],

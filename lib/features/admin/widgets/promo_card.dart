@@ -22,12 +22,19 @@ class AdminPromoCard extends StatelessWidget {
     required this.promo,
     required this.onEdit,
     required this.onToggleStatus,
+    required this.onDelete,
     this.isUpdating = false,
   });
 
   final PromoModel promo;
   final VoidCallback onEdit;
   final VoidCallback onToggleStatus;
+
+  /// PART 18B — "Delete promotions." Distinct from [onToggleStatus]
+  /// (activate/deactivate); the caller is expected to confirm with
+  /// the admin before actually deleting, same as
+  /// [ManagePromosScreen]'s confirmation dialog.
+  final VoidCallback onDelete;
 
   /// True while this specific promo's activate/deactivate toggle is
   /// mid-flight, so only its own switch shows a spinner rather than
@@ -53,6 +60,27 @@ class AdminPromoCard extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // PART 19 — small thumbnail of the admin-uploaded offer
+          // photo, when one exists. Purely a visual confirmation for
+          // the admin here; nothing is generated in its place.
+          if (promo.hasImage) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Image.network(
+                promo.imageUrl!,
+                width: 56,
+                height: 56,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  width: 56,
+                  height: 56,
+                  color: colors.surfaceContainerHighest,
+                  child: Icon(Icons.image_not_supported_outlined, color: colors.onSurfaceVariant),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+          ],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -104,10 +132,20 @@ class AdminPromoCard extends StatelessWidget {
           const SizedBox(width: 8),
           Column(
             children: [
-              IconButton(
-                tooltip: 'Edit promotion',
-                icon: const Icon(Icons.edit_outlined),
-                onPressed: isUpdating ? null : onEdit,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Edit promotion',
+                    icon: const Icon(Icons.edit_outlined),
+                    onPressed: isUpdating ? null : onEdit,
+                  ),
+                  IconButton(
+                    tooltip: 'Delete promotion',
+                    icon: Icon(Icons.delete_outline, color: colors.error),
+                    onPressed: isUpdating ? null : onDelete,
+                  ),
+                ],
               ),
               if (isUpdating)
                 const Padding(

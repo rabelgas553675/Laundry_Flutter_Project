@@ -22,6 +22,14 @@ class FileService {
   static const _allowedExtensions = {'jpg', 'jpeg', 'png'};
   static const _bucket = 'profile-images';
 
+  /// PART 19 — separate bucket for admin-uploaded promo photos, kept
+  /// apart from [_bucket] the same way the two features are otherwise
+  /// unrelated (different owner — admin vs. the signed-in user —
+  /// different lifetime, different access pattern). Must exist in the
+  /// Supabase project (public bucket, same setup as "profile-images")
+  /// before this is used.
+  static const _promoBucket = 'promo-images';
+
   sb.SupabaseClient get _client => sb.Supabase.instance.client;
 
   Future<XFile?> pickFromCamera() {
@@ -100,6 +108,56 @@ class FileService {
     } on sb.StorageException catch (e) {
       // Supabase returns a 400 with this message when the object
       // doesn't exist — treat it the same as "nothing to delete".
+      if (e.message.toLowerCase().contains('not found')) return;
+      throw AppException(e.message.isNotEmpty ? e.message : 'Could not remove the photo. Please try again.');
+    }
+  }
+
+  /// PART 19 — fixed filename per promo, same reasoning as
+  /// [_profilePath]: replacing a promo's photo overwrites the same
+  /// Storage object instead of leaving orphaned files behind.
+  String _promoPath(String promoId) => 'promos/$promoId/photo.jpg';
+
+  /// Validates, uploads to `promo-images/promos/{promoId}/photo.jpg`,
+  /// and returns the public URL to save as [PromoModel.imageUrl].
+  ///
+  /// [promoId] is generated up front by the caller (see
+  /// `PromoRepository.newPromoId`) so this can run — and the resulting
+  /// URL can be saved together with the rest of the promotion's
+  /// fields on its very first write — before the Firestore document
+  /// itself exists.
+  Future<String> uploadPromoImage({
+    required String promoId,
+    required XFile file,
+  }) async {
+    await _validate(file);
+
+    try {
+      final path = _promoPath(promoId);
+      final bytes = await file.readAsBytes();
+      await _client.storage.from(_promoBucket).uploadBinary(
+            path,
+            bytes,
+            fileOptions: const sb.FileOptions(
+              contentType: 'image/jpeg',
+              upsert: true, // overwrite the previous photo at this path
+            ),
+          );
+      // Cache-bust so a replaced photo shows immediately instead of a
+      // cached copy of the old one at the same URL.
+      final publicUrl = _client.storage.from(_promoBucket).getPublicUrl(path);
+      return '$publicUrl?updated=${DateTime.now().millisecondsSinceEpoch}';
+    } on sb.StorageException catch (e) {
+      throw AppException(e.message.isNotEmpty ? e.message : 'Upload failed. Please try again.');
+    }
+  }
+
+  /// Deletes a promo's stored photo. A missing object is treated as
+  /// success, same as [removeProfileImage].
+  Future<void> removePromoImage(String promoId) async {
+    try {
+      await _client.storage.from(_promoBucket).remove([_promoPath(promoId)]);
+    } on sb.StorageException catch (e) {
       if (e.message.toLowerCase().contains('not found')) return;
       throw AppException(e.message.isNotEmpty ? e.message : 'Could not remove the photo. Please try again.');
     }

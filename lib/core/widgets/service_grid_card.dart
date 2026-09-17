@@ -6,28 +6,27 @@
 // reuses the exact same card instead of duplicating it, so every service
 // tile in the app keeps looking identical.
 //
-// NOTE: ServiceModel only exposes id, name, description, pricePerKg,
-// estimatedTime, status, createdAt — there's no dedicated "unit" or
-// "asset path" field, so the helpers below still infer both from the
-// service name, same heuristic the original file used.
+// NOTE: ServiceModel now exposes a real `unit` field (see Part 1 of
+// the per-piece pricing feature, `core/utils/service_unit.dart`), so
+// the kg-vs-piece question below is always answered from
+// `service.unit` — never re-derived from the service name here. The
+// "asset path"/icon helpers still infer their asset from the name,
+// since that's a presentation concern unrelated to pricing unit.
 
 import 'package:flutter/material.dart';
 
 import '../../models/service_model.dart';
+import '../utils/service_unit.dart';
 import 'app_card.dart';
 
-/// How a service's price should be labeled/rendered.
-enum ServiceCardPriceUnit { perKg, perItem, pickManually }
-
-ServiceCardPriceUnit priceUnitForService(ServiceModel service) {
+/// Whether a service's price is picked manually at checkout (the
+/// "Service Bundle" tile) rather than shown directly on the card.
+/// Unrelated to [ServiceUnit] — a bundle isn't priced per kg or per
+/// piece itself; the customer builds their own combination
+/// downstream on [ServiceBundleScreen].
+bool isBundleService(ServiceModel service) {
   final name = service.name.toLowerCase();
-  if (name.contains('bundle') || name.contains('pick')) {
-    return ServiceCardPriceUnit.pickManually;
-  }
-  if (name.contains('dry') || name.contains('iron') || name.contains('item')) {
-    return ServiceCardPriceUnit.perItem;
-  }
-  return ServiceCardPriceUnit.perKg;
+  return name.contains('bundle') || name.contains('pick');
 }
 
 const List<Color> _etaPalette = [
@@ -36,8 +35,8 @@ const List<Color> _etaPalette = [
   Color(0xffe8567a), // pink/red
 ];
 
-Color etaBadgeColorForService(ServiceModel service, ServiceCardPriceUnit unit) {
-  if (unit == ServiceCardPriceUnit.pickManually) return const Color(0xff3d8bff);
+Color etaBadgeColorForService(ServiceModel service, {required bool isBundle}) {
+  if (isBundle) return const Color(0xff3d8bff);
   final index = service.estimatedTime.hashCode.abs() % _etaPalette.length;
   return _etaPalette[index];
 }
@@ -95,9 +94,8 @@ class ServiceGridCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final colors = Theme.of(context).colorScheme;
-    final unit = priceUnitForService(service);
-    final isBundle = unit == ServiceCardPriceUnit.pickManually;
-    final badgeColor = etaBadgeColorForService(service, unit);
+    final isBundle = isBundleService(service);
+    final badgeColor = etaBadgeColorForService(service, isBundle: isBundle);
 
     return AppCard(
       onTap: onTap,
@@ -202,9 +200,7 @@ class ServiceGridCard extends StatelessWidget {
                                   '\$${service.pricePerKg.toStringAsFixed(2)}',
                             ),
                             TextSpan(
-                              text: unit == ServiceCardPriceUnit.perItem
-                                  ? ' Per Item'
-                                  : ' Per Kg',
+                              text: ' ${ServiceUnitFormat.perUnitPhrase(service.unit)}',
                               style: textTheme.bodySmall?.copyWith(
                                 fontWeight: FontWeight.normal,
                                 color: Colors.black54,

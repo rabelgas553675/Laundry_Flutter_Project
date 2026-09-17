@@ -1,79 +1,104 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
 
-/// Greeting text block for the top of the User Dashboard.
-///
-/// Pure typography — no card, background, border, or shadow.
-/// Renders:
-///   "Hi {name}, " (bold, dark)  "Here's" (italic, dark blue)
-///   "Our Laundry Services." (regular weight, dark)
-///
-/// Display-only widget: takes the name, doesn't know where it came from.
+/// Glass-style search bar shown at the top of the Home tab, replacing
+/// the old logo + "HYDRO" wordmark lockup. `name` is kept as a
+/// parameter (unused visually) so existing call sites like
+/// `WelcomeHeader(name: userName)` keep compiling without changes.
 class WelcomeHeader extends StatelessWidget {
-  const WelcomeHeader({super.key, required this.name});
+  const WelcomeHeader({
+    super.key,
+    this.name,
+    this.onChanged,
+    this.onTap,
+    this.controller,
+    this.hintText = 'Search',
+    this.maxHeight = 56,
+  });
 
-  final String name;
-
-  // Dark-blue accent used for the italic "Here's".
-  static const Color _accentBlue = Color(0xFF0D47A1);
-  static const Color _dark = Color(0xFF1A1A1A);
+  final String? name;
+  final ValueChanged<String>? onChanged;
+  final VoidCallback? onTap;
+  final TextEditingController? controller;
+  final String hintText;
+  final double maxHeight;
 
   @override
   Widget build(BuildContext context) {
-    final trimmed = name.trim();
-    // Only the first name/word is shown, e.g. "J.Snow Wick" -> "J.Snow".
-    final firstName = trimmed.isNotEmpty ? trimmed.split(' ').first : 'there';
+    final double barHeight = maxHeight;
 
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Line 1: "Hi {firstName}, Here's" — bold greeting sized up
-          // relative to the tagline below.
-          RichText(
-            text: TextSpan(
-              style: const TextStyle(
-                fontSize: 36,
-                height: 1.3,
-                letterSpacing: 0.1,
-                fontFamily: 'SF Pro Display', // swap for your app's sans-serif
+    return SizedBox(
+      height: maxHeight,
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(barHeight / 2),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              height: barHeight,
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(barHeight / 2),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.4),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
               ),
-              children: [
-                TextSpan(
-                  text: 'Hi $firstName, ',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: _dark,
-                    fontStyle: FontStyle.normal,
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.search,
+                    size: barHeight * 0.45,
+                    color: Colors.black54,
                   ),
-                ),
-                const TextSpan(
-                  text: "Here's",
-                  style: TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontStyle: FontStyle.italic,
-                    color: _accentBlue,
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: onTap,
+                      child: TextField(
+                        controller: controller,
+                        onChanged: onChanged,
+                        readOnly: onTap != null,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 15,
+                        ),
+                        decoration: InputDecoration(
+                          hintText: hintText,
+                          hintStyle: const TextStyle(
+                            color: Colors.black45,
+                            fontSize: 15,
+                          ),
+                          filled: false,
+                          fillColor: Colors.transparent,
+                          contentPadding: EdgeInsets.zero,
+                          isDense: true,
+                          isCollapsed: true,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          focusedErrorBorder: InputBorder.none,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 2),
-          // Line 2: "Our Laundry Services." — smaller, lighter weight.
-          const Text(
-            'Our Laundry Services.',
-            style: TextStyle(
-              fontSize: 22,
-              height: 1.3,
-              letterSpacing: 0.1,
-              fontWeight: FontWeight.w400,
-              fontStyle: FontStyle.normal,
-              color: _dark,
-              fontFamily: 'SF Pro Display',
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../../app/routes.dart';
 import '../../../core/services/auth_state.dart';
 import '../../../core/utils/price_calculator.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/empty_state.dart';
@@ -34,11 +35,28 @@ class _AdminDashboardState extends State<AdminDashboard> {
   final OrderRepository _orderRepository = OrderRepository();
   final UserRepository _userRepository = UserRepository();
 
-  /// Bumped by the ErrorState "Retry" buttons below to force both
-  /// StreamBuilders to resubscribe. A Firestore *connection* drop
-  /// recovers on its own, but a bad composite index or a permissions
-  /// error won't clear itself without a fresh subscription attempt.
-  int _retryToken = 0;
+  // FIX: these used to be created inline as `_orderRepository.streamAllOrders()`
+  // / `_userRepository.streamAllUsers()` directly inside `build()`'s
+  // `StreamBuilder(stream: ...)`. Every time either stream emitted new
+  // data, StreamBuilder called setState -> build() ran again -> a brand
+  // new Stream instance was created -> StreamBuilder tore down its
+  // subscription and resubscribed. That caused the dashboard to flicker
+  // back to the loading state on every Firestore update (and burned
+  // extra reads/connections).
+  //
+  // Caching the streams as state fields means they're created exactly
+  // once, and only ever replaced explicitly (on retry), so
+  // StreamBuilder keeps a single live subscription per stream.
+  late Stream<List<OrderModel>> _ordersStream = _orderRepository.streamAllOrders();
+  late Stream<List<UserModel>> _usersStream = _userRepository.streamAllUsers();
+
+  void _retryOrders() {
+    setState(() => _ordersStream = _orderRepository.streamAllOrders());
+  }
+
+  void _retryUsers() {
+    setState(() => _usersStream = _userRepository.streamAllUsers());
+  }
 
   Future<void> _handleLogout(BuildContext context) async {
     await AuthState.instance.signOut();
@@ -77,8 +95,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       ),
       body: SafeArea(
         child: StreamBuilder<List<OrderModel>>(
-          key: ValueKey('orders-$_retryToken'),
-          stream: _orderRepository.streamAllOrders(),
+          stream: _ordersStream,
           builder: (context, orderSnapshot) {
             if (orderSnapshot.connectionState == ConnectionState.waiting) {
               return const LoadingWidget(message: 'Loading orders...');
@@ -86,15 +103,14 @@ class _AdminDashboardState extends State<AdminDashboard> {
             if (orderSnapshot.hasError) {
               return ErrorState(
                 message: 'Unable to load orders. Please try again.',
-                onRetry: () => setState(() => _retryToken++),
+                onRetry: _retryOrders,
               );
             }
 
             final orders = orderSnapshot.data ?? const <OrderModel>[];
 
             return StreamBuilder<List<UserModel>>(
-              key: ValueKey('users-$_retryToken'),
-              stream: _userRepository.streamAllUsers(),
+              stream: _usersStream,
               builder: (context, userSnapshot) {
                 if (userSnapshot.connectionState == ConnectionState.waiting) {
                   return const LoadingWidget(message: 'Loading users...');
@@ -102,7 +118,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 if (userSnapshot.hasError) {
                   return ErrorState(
                     message: 'Unable to load users. Please try again.',
-                    onRetry: () => setState(() => _retryToken++),
+                    onRetry: _retryUsers,
                   );
                 }
 
@@ -208,6 +224,35 @@ class _DashboardContent extends StatelessWidget {
           variant: AppButtonVariant.outlined,
           onPressed: () => Navigator.pushNamed(context, AppRoutes.reports),
         ),
+        const SizedBox(height: 12),
+        // BUG FIX — AppRoutes.manageServices / manageUsers /
+        // managePromos, and their screens (ManageServicesScreen,
+        // ManageUsersScreen, ManagePromosScreen), were all fully
+        // built and registered in routes.dart, but nothing in the
+        // app ever navigated to them — no button, no icon, no menu
+        // entry anywhere. They were only reachable by typing the
+        // route path directly. Wiring them up here the same way
+        // Manage Orders / Reports already are.
+        AppButton(
+          label: 'Manage Services',
+          icon: Icons.local_laundry_service_outlined,
+          variant: AppButtonVariant.outlined,
+          onPressed: () => Navigator.pushNamed(context, AppRoutes.manageServices),
+        ),
+        const SizedBox(height: 12),
+        AppButton(
+          label: 'Manage Users',
+          icon: Icons.people_outline,
+          variant: AppButtonVariant.outlined,
+          onPressed: () => Navigator.pushNamed(context, AppRoutes.manageUsers),
+        ),
+        const SizedBox(height: 12),
+        AppButton(
+          label: 'Manage Promos',
+          icon: Icons.local_offer_outlined,
+          variant: AppButtonVariant.outlined,
+          onPressed: () => Navigator.pushNamed(context, AppRoutes.managePromos),
+        ),
         const SizedBox(height: 24),
         Text('Order Status Summary', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
@@ -259,11 +304,7 @@ class _DashboardContent extends StatelessWidget {
 }
 
 /// One row in "Recent Orders" — order number, service + weight,
-/// total, and a status badge. Kept private to this file since PART
-/// 15's spec only calls for `dashboard_stat_card.dart` as a
-/// standalone reusable widget; PART 16's admin order management gets
-/// its own `admin_order_card.dart` with interactive status controls
-/// this read-only tile deliberately doesn't have.
+/// total, and a status badge.
 class _RecentOrderTile extends StatelessWidget {
   const _RecentOrderTile({required this.order});
 
@@ -288,7 +329,8 @@ class _RecentOrderTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${order.serviceName} · ${order.weight.toStringAsFixed(1)} kg',
+                  '${order.serviceName} · '
+                  '${order.isItemized ? '${order.items.length} item type(s)' : ServiceUnitFormat.formatQuantity(order.serviceUnit, order.weight)}',
                   style: textTheme.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ],
@@ -313,9 +355,7 @@ class _RecentOrderTile extends StatelessWidget {
 }
 
 /// One row in "Recent Users" — avatar, name, email, role, and
-/// registration date. Kept private for the same reason as
-/// [_RecentOrderTile]: PART 17's full user management screen gets its
-/// own richer card with edit/activate controls.
+/// registration date.
 class _RecentUserTile extends StatelessWidget {
   const _RecentUserTile({required this.user});
 
@@ -369,9 +409,7 @@ class _RecentUserTile extends StatelessWidget {
   }
 }
 
-/// "Sep 12, 2026" — used only for the recent-users registration date,
-/// so it's kept local instead of importing the user-feature-only
-/// `formatOrderDate` helper into the admin feature.
+/// "Sep 12, 2026" — used only for the recent-users registration date.
 String _formatShortDate(DateTime? date) {
   if (date == null) return '—';
   const months = [

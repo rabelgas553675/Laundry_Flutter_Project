@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/utils/service_unit.dart';
 import '../../../data/repositories/order_repository.dart';
 import '../../../models/order_model.dart';
 
@@ -78,15 +79,6 @@ String _headlineForStatus(OrderStatus status) {
     case OrderStatus.cancelled:
       return 'Your order was cancelled.';
   }
-}
-
-/// Formats [kg] without a trailing ".0" for whole-number weights
-/// (e.g. `4` instead of `4.0`), but keeps one decimal place otherwise
-/// (e.g. `4.5`) — [OrderModel.weight] is a `double` since the PART 10
-/// form allows fractional kilograms.
-String _weightLabel(double kg) {
-  if (kg == kg.roundToDouble()) return kg.toInt().toString();
-  return kg.toStringAsFixed(1);
 }
 
 /// Rough "time ago" for [dt] (usually [OrderModel.updatedAt], falling
@@ -219,7 +211,13 @@ class ActiveOrderCard extends StatelessWidget {
   String _metaLine(OrderModel order) {
     final parts = <String>[
       'Order #${order.orderNumber}',
-      '${_weightLabel(order.weight)} kg',
+      // PART 3/5 fix — same "0 pcs" bug fixed in `order_list_tile.dart`
+      // and `admin_order_card.dart`: an itemized (Dry Cleaning) order's
+      // `weight` is always 0, so show the garment count instead of
+      // running it through `formatQuantity`.
+      order.isItemized
+          ? '${order.items.length} item type(s)'
+          : ServiceUnitFormat.formatQuantity(order.serviceUnit, order.weight),
     ];
     final updated = _relativeTime(order.updatedAt ?? order.createdAt);
     if (updated != null) {

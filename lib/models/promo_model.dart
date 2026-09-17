@@ -115,6 +115,14 @@ class PromoModel {
 
   final DateTime? createdAt;
 
+  /// PART 19 — public URL of the admin-uploaded offer photo (Supabase
+  /// Storage, `promo-images` bucket — see [FileService.uploadPromoImage]).
+  /// `null`/empty means no photo has been uploaded for this promo yet;
+  /// the app never fabricates a placeholder image in its place — the
+  /// user dashboard's offer card shows a plain tinted icon tile
+  /// instead when this is unset.
+  final String? imageUrl;
+
   const PromoModel({
     required this.id,
     required this.code,
@@ -126,7 +134,13 @@ class PromoModel {
     this.status = PromoStatus.active,
     this.description = '',
     this.createdAt,
+    this.imageUrl,
   });
+
+  /// Whether this promo actually has a photo an admin uploaded — used
+  /// instead of a raw null/empty check wherever a promo card decides
+  /// between the photo layout and the icon fallback.
+  bool get hasImage => (imageUrl ?? '').trim().isNotEmpty;
 
   /// PART 18B — the four-state status shown on the admin promo list.
   /// [now] is injectable so this stays pure/testable rather than
@@ -186,6 +200,7 @@ class PromoModel {
       'endDate': Timestamp.fromDate(endDate),
       'status': status.value,
       'description': description,
+      'imageUrl': imageUrl,
       'createdAt': FieldValue.serverTimestamp(),
     };
   }
@@ -202,9 +217,14 @@ class PromoModel {
       'endDate': Timestamp.fromDate(endDate),
       'status': status.value,
       'description': description,
+      'imageUrl': imageUrl,
     };
   }
 
+  /// [imageUrl] uses a sentinel default (rather than `imageUrl ??
+  /// this.imageUrl`) so callers can explicitly clear a photo by
+  /// passing an empty string — plain omission still keeps the
+  /// existing photo, same as every other field here.
   PromoModel copyWith({
     String? code,
     PromoDiscountType? discountType,
@@ -214,6 +234,7 @@ class PromoModel {
     DateTime? endDate,
     PromoStatus? status,
     String? description,
+    Object? imageUrl = _unset,
   }) {
     return PromoModel(
       id: id,
@@ -226,8 +247,11 @@ class PromoModel {
       status: status ?? this.status,
       description: description ?? this.description,
       createdAt: createdAt,
+      imageUrl: identical(imageUrl, _unset) ? this.imageUrl : imageUrl as String?,
     );
   }
+
+  static const Object _unset = Object();
 
   factory PromoModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -245,6 +269,7 @@ class PromoModel {
       status: PromoStatusX.fromValue(data['status']),
       description: data['description'] ?? '',
       createdAt: createdTs is Timestamp ? createdTs.toDate() : null,
+      imageUrl: (data['imageUrl'] as String?)?.trim(),
     );
   }
 

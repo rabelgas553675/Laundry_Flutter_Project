@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/constants.dart';
 
@@ -25,6 +26,7 @@ class AppTextField extends StatefulWidget {
     this.enabled = true,
     this.textInputAction,
     this.onChanged,
+    this.inputFormatters,
   });
 
   final String label;
@@ -38,6 +40,14 @@ class AppTextField extends StatefulWidget {
   final bool enabled;
   final TextInputAction? textInputAction;
   final void Function(String)? onChanged;
+
+  /// Part 2 (per-piece pricing) — lets a caller restrict what a
+  /// customer can type, e.g. digits-only for a piece-based quantity
+  /// field (`FilteringTextInputFormatter.digitsOnly`), while every
+  /// other field that doesn't pass this keeps accepting anything
+  /// [keyboardType] allows, exactly as before. Optional and `null` by
+  /// default, so no existing call site is affected.
+  final List<TextInputFormatter>? inputFormatters;
 
   @override
   State<AppTextField> createState() => _AppTextFieldState();
@@ -78,6 +88,7 @@ class _AppTextFieldState extends State<AppTextField> {
           enabled: widget.enabled,
           textInputAction: widget.textInputAction,
           onChanged: widget.onChanged,
+          inputFormatters: widget.inputFormatters,
           style: const TextStyle(fontSize: 15.5),
           decoration: InputDecoration(
             labelText: widget.label,

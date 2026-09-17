@@ -1,11 +1,27 @@
-/// PART 11.1 — reusable, UI-independent laundry order price
+/// PART 11.1 / PART 3 — reusable, UI-independent laundry order price
 /// calculator.
 ///
-/// Calculation:
-///   Subtotal = Service Price (per kg) × Weight (kg)
-///   Total    = Subtotal + Detergent Fee + Pickup Fee − Discount
+/// Two ways to price the "subtotal" line, depending on the service:
 ///
-/// Example (matches the PART 11 spec):
+/// - Weight/piece-count services (Standard Wash, Wash & Ironing, ...):
+///     Subtotal = Service Price (per kg/pc) × Weight or Quantity
+///   Example (Wash & Ironing): 5 kg × ₱80/kg = ₱400 subtotal.
+///
+/// - Itemized services (Dry Cleaning):
+///     Subtotal = Σ(quantity × item price) across every selected
+///     garment — e.g. 2 Suits × ₱150 + 1 Dress × ₱150 + 3 Pants × ₱90
+///     = ₱300 + ₱150 + ₱270 = ₱720. This calculator never re-derives
+///     that sum itself (it stays UI/model-independent — see the class
+///     doc comment on [calculate]); the caller passes the already-
+///     summed total in via [calculate]'s `itemsSubtotal` parameter,
+///     computed once by `OrderItemModel.subtotalOf`/
+///     `OrderDraft.itemsSubtotal` — never re-implemented a third time
+///     here or in a screen.
+///
+/// Either way:
+///   Total = Subtotal + Detergent Fee + Pickup Fee − Discount
+///
+/// Full example (matches the PART 11 spec):
 ///   Standard Wash, 5 kg × ₱70/kg = ₱350 subtotal
 ///   + Detergent fee   ₱30
 ///   + Pickup fee      ₱50
@@ -73,10 +89,24 @@ class PriceCalculator {
 
   /// Computes the full [PriceBreakdown] for one order.
   ///
-  /// - [servicePricePerKg]: the chosen service's price per kg (from
-  ///   `ServiceModel.pricePerKg` — never hard-code this in a widget,
-  ///   per PART 08).
-  /// - [weightKg]: the weight entered on the PART 10 order form.
+  /// - [servicePricePerKg]: the chosen service's price per kg/piece
+  ///   (from `ServiceModel.pricePerKg` — never hard-code this in a
+  ///   widget, per PART 08). Ignored when [itemsSubtotal] is passed —
+  ///   see below.
+  /// - [weightKg]: the weight (or piece count) entered on the PART 10
+  ///   order form. Ignored when [itemsSubtotal] is passed.
+  /// - [itemsSubtotal]: PART 3 — for an itemized order (Dry
+  ///   Cleaning), the already-computed Σ(quantity × item price)
+  ///   across every selected garment (see `OrderDraft.itemsSubtotal`
+  ///   / `OrderItemModel.subtotalOf`). When this is provided (non-
+  ///   null), it is used as-is for the subtotal line instead of
+  ///   `servicePricePerKg × weightKg` — a Dry Cleaning draft always
+  ///   has `weightKg == 0` (it isn't priced by weight at all), so
+  ///   computing the subtotal the weight-based way for an itemized
+  ///   order would silently price it at ₱0. Leave `null` for any
+  ///   weight/piece-count service (Wash & Ironing, Quick/Standard/
+  ///   Premium Wash), which keeps pricing via [servicePricePerKg] ×
+  ///   [weightKg] exactly as before.
   /// - [detergentFee]: the chosen detergent's flat additional fee
   ///   (from `DetergentModel.additionalPrice`), or 0 if none
   ///   selected.
@@ -89,8 +119,9 @@ class PriceCalculator {
   /// better to fail loudly here than silently show a nonsensical
   /// total on the summary screen.
   static PriceBreakdown calculate({
-    required double servicePricePerKg,
-    required double weightKg,
+    double servicePricePerKg = 0,
+    double weightKg = 0,
+    double? itemsSubtotal,
     double detergentFee = 0,
     double pickupFee = 0,
     double discount = 0,
@@ -107,6 +138,13 @@ class PriceCalculator {
         weightKg,
         'weightKg',
         'Weight cannot be negative.',
+      );
+    }
+    if (itemsSubtotal != null && itemsSubtotal < 0) {
+      throw ArgumentError.value(
+        itemsSubtotal,
+        'itemsSubtotal',
+        'Items subtotal cannot be negative.',
       );
     }
     if (detergentFee < 0) {
@@ -131,7 +169,7 @@ class PriceCalculator {
       );
     }
 
-    final subtotal = _round2(servicePricePerKg * weightKg);
+    final subtotal = _round2(itemsSubtotal ?? (servicePricePerKg * weightKg));
     final roundedDetergentFee = _round2(detergentFee);
     final roundedPickupFee = _round2(pickupFee);
 

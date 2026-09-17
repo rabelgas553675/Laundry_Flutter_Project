@@ -1,10 +1,16 @@
+import 'dart:typed_data';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../../../core/errors/app_exception.dart';
+import '../../../core/services/file_service.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../data/repositories/promo_repository.dart';
 import '../../../models/promo_model.dart';
+import '../widgets/promo_photo_field.dart';
 
 /// PART 18B — "Create promotions."
 ///
@@ -25,6 +31,7 @@ class AddPromoScreen extends StatefulWidget {
 
 class _AddPromoScreenState extends State<AddPromoScreen> {
   late final PromoRepository _repository = widget.repository ?? PromoRepository();
+  final _fileService = FileService();
   final _formKey = GlobalKey<FormState>();
 
   final _codeController = TextEditingController();
@@ -40,6 +47,14 @@ class _AddPromoScreenState extends State<AddPromoScreen> {
   // period rather than two null dates.
   DateTime? _startDate = DateTime.now();
   DateTime? _endDate = DateTime.now().add(const Duration(days: 30));
+
+  // PART 19 — the admin's selected offer photo, held locally (never
+  // auto-generated/defaulted — see PromoModel.imageUrl) until the
+  // promotion is actually created. [_pickedImageFile] is what
+  // eventually gets uploaded; [_pickedImageBytes] is just its preview.
+  XFile? _pickedImageFile;
+  Uint8List? _pickedImageBytes;
+  bool _isPickingImage = false;
 
   bool _isSaving = false;
   String? _errorMessage;
@@ -77,6 +92,94 @@ class _AddPromoScreenState extends State<AddPromoScreen> {
     if (parsed == null) return 'Enter a valid number.';
     if (parsed < 0) return 'Minimum order cannot be negative.';
     return null;
+  }
+
+  Future<void> _showPhotoOptions() async {
+    final colorScheme = Theme.of(context).colorScheme;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: colorScheme.surfaceContainerLow,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 8),
+                Text(
+                  'Offer Photo',
+                  style: Theme.of(sheetContext)
+                      .textTheme
+                      .titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                PromoPhotoSheetOption(
+                  icon: Icons.photo_camera_rounded,
+                  label: 'Take Photo',
+                  color: colorScheme.primary,
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _pickImage(ImageSource.camera);
+                  },
+                ),
+                PromoPhotoSheetOption(
+                  icon: Icons.photo_library_rounded,
+                  label: 'Choose From Gallery',
+                  color: colorScheme.primary,
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _pickImage(ImageSource.gallery);
+                  },
+                ),
+                if (_pickedImageBytes != null)
+                  PromoPhotoSheetOption(
+                    icon: Icons.delete_outline_rounded,
+                    label: 'Remove Selected Photo',
+                    color: colorScheme.error,
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      setState(() {
+                        _pickedImageFile = null;
+                        _pickedImageBytes = null;
+                      });
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _pickImage(ImageSource source) async {
+    final XFile? picked = source == ImageSource.camera
+        ? await _fileService.pickFromCamera()
+        : await _fileService.pickFromGallery();
+    if (picked == null) return; // user cancelled the picker
+
+    setState(() => _isPickingImage = true);
+    try {
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _pickedImageFile = picked;
+        _pickedImageBytes = bytes;
+        _errorMessage = null;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() => _errorMessage = 'Could not load that photo. Please try another.');
+      }
+    } finally {
+      if (mounted) setState(() => _isPickingImage = false);
+    }
   }
 
   Future<void> _pickDate({required bool isStart}) async {
@@ -134,8 +237,36 @@ class _AddPromoScreenState extends State<AddPromoScreen> {
       final minimumOrderText = _minimumOrderController.text.trim();
       final minimumOrder = minimumOrderText.isEmpty ? 0.0 : double.parse(minimumOrderText);
 
+      // PART 19 — the promo's id is generated up front so a selected
+      // photo can be uploaded to a path keyed by it *before* the
+      // promo document itself is written, so this very first write
+      // already carries the right imageUrl.
+      final promoId = _repository.newPromoId();
+
+      String? imageUrl;
+      if (_pickedImageFile != null) {
+        try {
+          imageUrl = await _fileService.uploadPromoImage(
+            promoId: promoId,
+            file: _pickedImageFile!,
+          );
+        } on AppException catch (e) {
+          setState(() {
+            _errorMessage = e.message;
+            _isSaving = false;
+          });
+          return;
+        } catch (_) {
+          setState(() {
+            _errorMessage = 'Could not upload the photo. Please try again.';
+            _isSaving = false;
+          });
+          return;
+        }
+      }
+
       final promo = PromoModel(
-        id: '',
+        id: promoId,
         code: code,
         discountType: _discountType,
         discountValue: discountValue,
@@ -144,12 +275,16 @@ class _AddPromoScreenState extends State<AddPromoScreen> {
         endDate: _endDate!,
         status: _status,
         description: _descriptionController.text.trim(),
+        imageUrl: imageUrl,
       );
 
       await _repository.createPromo(promo);
 
       if (!mounted) return;
-      Navigator.pop(context, true);
+      // Return the created promo itself (not just `true`) so the
+      // caller can splice it straight into its in-memory list instead
+      // of re-fetching the whole catalog just to show one new row.
+      Navigator.pop(context, promo);
     } on FirebaseException catch (e) {
       setState(() => _errorMessage = e.message ?? 'Unable to save this promotion.');
     } catch (_) {
@@ -182,6 +317,14 @@ class _AddPromoScreenState extends State<AddPromoScreen> {
                 _ErrorBanner(message: _errorMessage!),
                 const SizedBox(height: 12),
               ],
+              Text('Offer Photo', style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 8),
+              PromoPhotoField(
+                onTap: _isSaving ? () {} : _showPhotoOptions,
+                pendingImageBytes: _pickedImageBytes,
+                isBusy: _isPickingImage,
+              ),
+              const SizedBox(height: 16),
               AppTextField(
                 label: 'Promo Code',
                 hint: 'e.g. WELCOME20',

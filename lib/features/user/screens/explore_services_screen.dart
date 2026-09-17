@@ -1,6 +1,8 @@
 // TARGET PATH IN YOUR PROJECT:
-// lib/features/services/screens/explore_services_screen.dart
+// lib/features/user/screens/explore_services_screen.dart
 // (replaces the existing file at that path)
+
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
@@ -14,6 +16,12 @@ import '../../../models/service_model.dart';
 import 'laundry_order_screen.dart';
 import '../../services/screens/service_bundle_screen.dart';
 
+/// Fixed content height of the frosted app bar — same value as
+/// `UserDashboard`'s `_kAppBarContentHeight`, kept as its own local
+/// constant so this screen doesn't need to import anything from
+/// `user_dashboard.dart` just for one number.
+const double _kAppBarContentHeight = 64;
+
 /// PART 1 — the full catalog behind "See all" on the dashboard's
 /// "Our Services" section.
 ///
@@ -23,6 +31,16 @@ import '../../services/screens/service_bundle_screen.dart';
 /// Tapping "Service Bundle" no longer opens the order screen directly:
 /// it opens ServiceBundleScreen, which is where Quick Wash / Standard
 /// Wash / Premium Wash now live.
+///
+/// REDESIGN — this screen now uses the same blurred-blob background
+/// and frosted glass app bar as `UserDashboard`, so navigating here
+/// from "See all" on the dashboard feels like a continuation of the
+/// same surface rather than a visually unrelated screen. The service
+/// cards themselves (`ServiceGridCard`/`_PlaceholderCategoryCard`)
+/// are left as solid white cards, unchanged — that mirrors how the
+/// dashboard's own content (`ActiveOrderCard`, `ServiceSelectionCard`)
+/// is solid on top of its blurred backdrop; only the chrome (app bar,
+/// background) is glass.
 class ExploreServicesScreen extends StatefulWidget {
   const ExploreServicesScreen({super.key});
 
@@ -172,97 +190,325 @@ class _ExploreServicesScreenState extends State<ExploreServicesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final statusBarInset = MediaQuery.paddingOf(context).top;
+    final appBarTotalHeight = statusBarInset + _kAppBarContentHeight;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Explore Services')),
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _refresh,
-          child: CustomScrollView(
-            slivers: [
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                  child: Text(
-                    'Our Services',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
+      backgroundColor: Colors.transparent,
+      extendBody: true,
+      extendBodyBehindAppBar: true,
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(appBarTotalHeight),
+        child: _ExploreGlassAppBar(
+          title: 'Explore Services',
+          onBack: () => Navigator.maybePop(context),
+        ),
+      ),
+      body: Stack(
+        children: [
+          // Same blurred color blobs on a light base wash as
+          // UserDashboard's `_DashboardBackground` — kept as its own
+          // local copy (rather than importing a private widget from
+          // another screen) so this file stays self-contained.
+          const Positioned.fill(child: _ExploreBackground()),
+          SafeArea(
+            top: false,
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: CustomScrollView(
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: SizedBox(height: appBarTotalHeight + 8),
+                  ),
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                      child: Text(
+                        'Our Services',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                    ),
+                  ),
+                  if (_isLoading)
+                    const SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: LoadingWidget(message: 'Loading services...'),
+                    )
+                  else if (_error != null)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 48),
+                        child: ErrorState(
+                          message:
+                              'We couldn\'t load our services. Please try again.',
+                          onRetry: _refresh,
                         ),
+                      ),
+                    )
+                  else if (_services.isEmpty)
+                    SliverFillRemaining(
+                      hasScrollBody: false,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 48),
+                        child: EmptyState(
+                          icon: Icons.local_laundry_service_outlined,
+                          title: 'No services available right now',
+                          message: 'Check back soon for our laundry services.',
+                        ),
+                      ),
+                    )
+                  else
+                    // Fixed 2x2 grid of the four category tiles — always
+                    // exactly 4 cells, in the order defined by
+                    // `_mainCategories`, regardless of how many services
+                    // Firestore actually returns.
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                      sliver: SliverGrid(
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 14,
+                          crossAxisSpacing: 14,
+                          childAspectRatio: 0.72,
+                        ),
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final tile = _mainCategories[index];
+                            final matched = _matchService(tile.keywords);
+                            // Prefer the real ServiceModel (real photo, real
+                            // price/ETA from Firestore) whenever one was
+                            // found. Only the "Service Bundle" tile is meant
+                            // to ever render without a match, since it's a
+                            // pure navigation entry point rather than an
+                            // orderable service.
+                            if (matched != null) {
+                              return ServiceGridCard(
+                                service: matched,
+                                onTap: () => _handleTileTap(tile, matched),
+                              );
+                            }
+                            return _PlaceholderCategoryCard(
+                              label: tile.label,
+                              assetPath: tile.assetPath,
+                              fallbackIcon: tile.fallbackIcon,
+                              isBundle: tile.isBundle,
+                              onTap: () => _handleTileTap(tile, null),
+                            );
+                          },
+                          childCount: _mainCategories.length,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Ambient backdrop for this screen — a light base wash with three
+/// large, heavily-blurred color blobs pinned near the corners. Pixel-
+/// for-pixel the same treatment as `UserDashboard`'s own
+/// `_DashboardBackground`, so pushing this screen from "See all"
+/// reads as a continuation of the same surface rather than a jump to
+/// a visually different screen.
+class _ExploreBackground extends StatelessWidget {
+  const _ExploreBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xfff4f6fb),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          // Top-right dark-blue-to-light-blue blob
+          Positioned(
+            top: -90,
+            right: -70,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xff0D47A1), Color(0xffB3E5FC)],
                   ),
                 ),
               ),
-              if (_isLoading)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: LoadingWidget(message: 'Loading services...'),
-                )
-              else if (_error != null)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 48),
-                    child: ErrorState(
-                      message:
-                          'We couldn\'t load our services. Please try again.',
-                      onRetry: _refresh,
-                    ),
-                  ),
-                )
-              else if (_services.isEmpty)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 48),
-                    child: EmptyState(
-                      icon: Icons.local_laundry_service_outlined,
-                      title: 'No services available right now',
-                      message: 'Check back soon for our laundry services.',
-                    ),
-                  ),
-                )
-              else
-                // Fixed 2x2 grid of the four category tiles — always
-                // exactly 4 cells, in the order defined by
-                // `_mainCategories`, regardless of how many services
-                // Firestore actually returns.
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                  sliver: SliverGrid(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      mainAxisSpacing: 14,
-                      crossAxisSpacing: 14,
-                      childAspectRatio: 0.72,
-                    ),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final tile = _mainCategories[index];
-                        final matched = _matchService(tile.keywords);
-                        // Prefer the real ServiceModel (real photo, real
-                        // price/ETA from Firestore) whenever one was
-                        // found. Only the "Service Bundle" tile is meant
-                        // to ever render without a match, since it's a
-                        // pure navigation entry point rather than an
-                        // orderable service.
-                        if (matched != null) {
-                          return ServiceGridCard(
-                            service: matched,
-                            onTap: () => _handleTileTap(tile, matched),
-                          );
-                        }
-                        return _PlaceholderCategoryCard(
-                          label: tile.label,
-                          assetPath: tile.assetPath,
-                          fallbackIcon: tile.fallbackIcon,
-                          isBundle: tile.isBundle,
-                          onTap: () => _handleTileTap(tile, null),
-                        );
-                      },
-                      childCount: _mainCategories.length,
-                    ),
-                  ),
+            ),
+          ),
+          // Left-side dark-blue blob, roughly mid-height
+          Positioned(
+            top: 260,
+            left: -90,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xff0D47A1).withValues(alpha: 0.55),
                 ),
+              ),
+            ),
+          ),
+          // Bottom-right light-blue blob, sits behind the last grid row
+          Positioned(
+            bottom: -60,
+            right: -50,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xff8EC5FC).withValues(alpha: 0.45),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Frosted-glass app bar matching `UserDashboard`'s `_DashboardAppBar`
+/// treatment: a blurred, semi-transparent bar with a rounded bottom
+/// edge and a subtle border/shadow, instead of a solid opaque
+/// Material AppBar. Unlike the dashboard's bar (which is a bottom-nav
+/// root tab and shows a logout action), this one is reached via
+/// `Navigator.push`, so its leading glass button is a back arrow
+/// instead.
+class _ExploreGlassAppBar extends StatelessWidget {
+  const _ExploreGlassAppBar({required this.title, required this.onBack});
+
+  final String title;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(24),
+        bottomRight: Radius.circular(24),
+      ),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.18),
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(24),
+              bottomRight: Radius.circular(24),
+            ),
+            border: Border(
+              bottom: BorderSide(
+                color: Colors.white.withValues(alpha: 0.5),
+                width: 1,
+              ),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: colorScheme.primary.withValues(alpha: 0.10),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
             ],
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: SizedBox(
+              height: _kAppBarContentHeight,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(10, 0, 18, 0),
+                child: Row(
+                  children: [
+                    _ExploreGlassIconButton(
+                      icon: Icons.arrow_back_ios_new_rounded,
+                      tooltip: 'Back',
+                      onPressed: onBack,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small frosted circular icon button — same visual recipe as
+/// UserDashboard's private `_GlassIconButton`, generalized with an
+/// `icon`/`tooltip` so this file doesn't need to reach into another
+/// screen's private widget.
+class _ExploreGlassIconButton extends StatelessWidget {
+  const _ExploreGlassIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(100),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.25),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            tooltip: tooltip,
+            icon: Icon(icon, color: Colors.black87, size: 17),
+            onPressed: onPressed,
           ),
         ),
       ),

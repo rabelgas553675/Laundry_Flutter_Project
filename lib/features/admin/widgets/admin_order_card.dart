@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/price_calculator.dart';
+import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../models/order_model.dart';
 import '../../../models/user_model.dart';
@@ -83,7 +84,12 @@ class AdminOrderCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${order.serviceName} · ${order.weight.toStringAsFixed(1)} kg',
+                    // PART 3/5 fix — same "0 pcs" bug as
+                    // `order_list_tile.dart`'s customer-facing tile:
+                    // an itemized (Dry Cleaning) order's `weight` is
+                    // always 0, so show the garment count instead.
+                    '${order.serviceName} · '
+                    '${order.isItemized ? '${order.items.length} item type(s)' : ServiceUnitFormat.formatQuantity(order.serviceUnit, order.weight)}',
                     style: textTheme.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                   ),
                   const SizedBox(height: 2),

@@ -136,16 +136,39 @@ class NotificationService {
   /// and this check is what turns the ones that aren't a genuine new
   /// status into no-ops.
   ///
+  /// ROOT-CAUSE FIX for "notifyOrderCreated failed (non-fatal):
+  /// [cloud_firestore/permission-denied] Missing or insufficient
+  /// permissions" — firing on every single order, not just
+  /// offer/promo ones. This query used to filter only on `orderId`
+  /// and `type`, with no `userId` filter, but firestore.rules'
+  /// notifications read rule is scoped to `resource.data.userId ==
+  /// request.auth.uid`. Exactly like
+  /// [OrderRepository._generateUniqueOrderNumber]'s already-documented
+  /// bug, Firestore rejects a *list* query outright — with
+  /// `permission-denied`, before it ever runs — unless it can prove
+  /// from the query's own structure that every possible match
+  /// satisfies the rule; a query with no `userId` filter can never be
+  /// proven that way. So this duplicate-check always failed, for
+  /// every customer, on every order, and [createNotification]'s
+  /// actual write right after it never even ran.
+  ///
+  /// Fixed by adding the same `userId` filter [streamOrdersForUser]
+  /// already uses — the query is now provably restricted to this
+  /// caller's own notifications, satisfying the rule. All three
+  /// filters are plain equality (`==`), so this still needs no manual
+  /// composite index; Firestore's automatic indexing covers any
+  /// number of equality-only `where()` clauses.
+  ///
   /// Scoped to one order at a time (`orderId` + `type`) rather than
   /// checked globally, so it can never mistake *this* order's
-  /// "Washing" notification for a different order's, and doesn't
-  /// require an extra composite index beyond the one Firestore
-  /// suggests the first time this query runs.
+  /// "Washing" notification for a different order's.
   Future<bool> _hasNotification({
+    required String userId,
     required String orderId,
     required NotificationType type,
   }) async {
     final snapshot = await _notificationsRef
+        .where('userId', isEqualTo: userId)
         .where('orderId', isEqualTo: orderId)
         .where('type', isEqualTo: type.value)
         .limit(1)
@@ -182,6 +205,7 @@ class NotificationService {
     }
 
     final alreadyExists = await _hasNotification(
+      userId: notification.userId,
       orderId: notification.orderId,
       type: notification.type,
     );
