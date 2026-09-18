@@ -23,15 +23,22 @@ import 'edit_promo_screen.dart';
 /// add/edit/toggle rather than holding a permanent realtime
 /// subscription open, via [PromoRepository.getAllPromos].
 ///
-/// Reachable only through the `managePromos` route, which [RoleGuard]
+/// Reachable through the `managePromos` route, which [RoleGuard]
 /// (PART 05) restricts to [UserRole.admin] — this screen does no role
-/// checking of its own.
+/// checking of its own — and also embedded directly as one of
+/// [AdminDashboard]'s bottom-nav tabs (see [embedded]).
 class ManagePromosScreen extends StatefulWidget {
-  const ManagePromosScreen({super.key, this.repository});
+  const ManagePromosScreen({super.key, this.repository, this.embedded = false});
 
   /// Injectable for widget tests; defaults to a real
   /// Supabase-backed [PromoRepository].
   final PromoRepository? repository;
+
+  /// When `true`, shown as one tab of [AdminDashboard]'s bottom-nav
+  /// `IndexedStack` — no own `Scaffold`/`AppBar` is drawn in that
+  /// case, and the status [TabBar] moves into the body instead of
+  /// living in `AppBar.bottom` (there's no AppBar to hang it off of).
+  final bool embedded;
 
   @override
   State<ManagePromosScreen> createState() => _ManagePromosScreenState();
@@ -245,23 +252,42 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Built once per build() and placed in exactly one of the two
+    // spots below (AppBar.bottom when standalone, inline in the body
+    // when embedded) — never both at once, so there's no duplicate
+    // widget-in-tree issue despite the single shared instance.
+    final tabBar = TabBar(
+      controller: _tabController,
+      isScrollable: true,
+      tabs: _tabs.map((label) => Tab(text: label)).toList(),
+    );
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Manage Promotions'),
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: _tabs.map((label) => Tab(text: label)).toList(),
-        ),
-      ),
+      backgroundColor: widget.embedded ? Colors.transparent : null,
+      appBar: widget.embedded
+          ? null
+          : AppBar(
+              title: const Text('Manage Promotions'),
+              bottom: tabBar,
+            ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _openAddScreen,
         icon: const Icon(Icons.add),
         label: const Text('Add Promo'),
       ),
       body: SafeArea(
+        top: !widget.embedded,
         child: Column(
           children: [
+            // No AppBar to hang the TabBar off of when embedded, so
+            // it renders here instead, above the search field — same
+            // visual position it occupies via AppBar.bottom when
+            // standalone, just moved into the body.
+            if (widget.embedded)
+              Material(
+                color: Colors.transparent,
+                child: tabBar,
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
               child: TextField(

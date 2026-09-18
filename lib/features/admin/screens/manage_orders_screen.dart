@@ -21,17 +21,29 @@ import 'admin_order_details.dart';
 /// pair of listeners backs the whole screen, the same "one stream,
 /// many views" shape [MyOrdersScreen] uses for its own tabs.
 ///
-/// Reachable only through the `manageOrders` route, which
-/// [RoleGuard] (PART 05) already restricts to [UserRole.admin] — this
-/// screen does no role checking of its own.
+/// Reachable through the `manageOrders` route, which [RoleGuard]
+/// (PART 05) already restricts to [UserRole.admin] — this screen does
+/// no role checking of its own — and also embedded directly as one of
+/// [AdminDashboard]'s bottom-nav tabs (see [embedded]).
 class ManageOrdersScreen extends StatefulWidget {
-  const ManageOrdersScreen({super.key, this.orderRepository, this.userRepository});
+  const ManageOrdersScreen({
+    super.key,
+    this.orderRepository,
+    this.userRepository,
+    this.embedded = false,
+  });
 
   /// Injectable for widget tests; defaults to real repositories
   /// backed by live Firestore, same pattern as every other screen in
   /// this project that takes an optional repository.
   final OrderRepository? orderRepository;
   final UserRepository? userRepository;
+
+  /// When `true`, shown as one tab of [AdminDashboard]'s bottom-nav
+  /// `IndexedStack` — no own `Scaffold`/`AppBar` is drawn in that
+  /// case, and the status [TabBar] moves into the body instead of
+  /// living in `AppBar.bottom` (there's no AppBar to hang it off of).
+  final bool embedded;
 
   @override
   State<ManageOrdersScreen> createState() => _ManageOrdersScreenState();
@@ -122,18 +134,37 @@ class _ManageOrdersScreenState extends State<ManageOrdersScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Built once per build() and placed in exactly one of the two
+    // spots below (AppBar.bottom when standalone, inline in the body
+    // when embedded) — never both at once, so there's no duplicate
+    // widget-in-tree issue despite the single shared instance.
+    final tabBar = TabBar(
+      controller: _tabController,
+      isScrollable: true,
+      tabs: _tabs.map((label) => Tab(text: label)).toList(),
+    );
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Manage Orders'),
-        bottom: TabBar(
-          controller: _tabController,
-          isScrollable: true,
-          tabs: _tabs.map((label) => Tab(text: label)).toList(),
-        ),
-      ),
+      backgroundColor: widget.embedded ? Colors.transparent : null,
+      appBar: widget.embedded
+          ? null
+          : AppBar(
+              title: const Text('Manage Orders'),
+              bottom: tabBar,
+            ),
       body: SafeArea(
+        top: !widget.embedded,
         child: Column(
           children: [
+            // No AppBar to hang the TabBar off of when embedded, so
+            // it renders here instead, above the search field — same
+            // visual position it occupies via AppBar.bottom when
+            // standalone, just moved into the body.
+            if (widget.embedded)
+              Material(
+                color: Colors.transparent,
+                child: tabBar,
+              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
               child: TextField(

@@ -28,11 +28,15 @@ import 'sales_report_screen.dart';
 /// (PART 05) restricts to [UserRole.admin] — this screen does no role
 /// checking of its own.
 class ReportsScreen extends StatefulWidget {
-  const ReportsScreen({super.key, this.repository});
+  const ReportsScreen({super.key, this.repository, this.embedded = false});
 
   /// Injectable for widget tests; defaults to a real
   /// Firestore-backed [OrderRepository].
   final OrderRepository? repository;
+
+  /// When `true`, shown as one tab of [AdminDashboard]'s bottom-nav
+  /// `IndexedStack` — no own `Scaffold`/`AppBar` is drawn in that case.
+  final bool embedded;
 
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
@@ -50,8 +54,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Reports')),
+      backgroundColor: widget.embedded ? Colors.transparent : null,
+      appBar: widget.embedded ? null : AppBar(title: const Text('Reports')),
       body: SafeArea(
+        top: !widget.embedded,
         child: StreamBuilder<List<OrderModel>>(
           key: ValueKey('report-orders-$_retryToken'),
           stream: _repository.streamAllOrders(),

@@ -1,14 +1,24 @@
+import 'dart:ui';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_state.dart';
+import '../../../core/widgets/glass_container.dart';
 import '../../../core/widgets/loading_widget.dart';
 import '../../../data/repositories/service_item_repository.dart';
 import '../../../data/repositories/service_repository.dart';
 import '../../../models/service_model.dart';
 import '../widgets/admin_service_card.dart';
 import '../widgets/service_form_dialog.dart';
+
+/// Fixed content height of the glass app bar (excludes the status-bar
+/// inset, which SafeArea adds on top of this) — matches the same
+/// constant used across the rest of the Admin section. Only used when
+/// [ManageServicesScreen.embedded] is `false`, since the embedded tab
+/// inside [AdminDashboard] already has its own app bar + backdrop.
+const double _kAppBarContentHeight = 64;
 
 /// PART 17 — Admin Service Management.
 ///
@@ -29,12 +39,26 @@ import '../widgets/service_form_dialog.dart';
 /// Reachable only through the `manageServices` route, which
 /// [RoleGuard] (PART 05) restricts to [UserRole.admin] — this screen
 /// does no role checking of its own.
+///
+/// REDESIGN — when NOT [embedded] (i.e. opened as its own route
+/// rather than as an [AdminDashboard] tab), this now draws the same
+/// frosted-glass app bar + blue-blob backdrop as the rest of the
+/// Admin section, and every loading/error/empty state renders inside
+/// a [GlassContainer] panel. When [embedded] is `true` it stays exactly
+/// as before — no own app bar/backdrop, since [AdminDashboard] already
+/// supplies both — only the state panels below pick up the glass
+/// treatment, since they read fine on either backdrop.
 class ManageServicesScreen extends StatefulWidget {
-  const ManageServicesScreen({super.key, this.repository});
+  const ManageServicesScreen({super.key, this.repository, this.embedded = false});
 
   /// Injectable for widget tests; defaults to a real
   /// Firestore-backed [ServiceRepository].
   final ServiceRepository? repository;
+
+  /// When `true`, shown as one tab of [AdminDashboard]'s bottom-nav
+  /// `IndexedStack` — no own `Scaffold`/`AppBar`/background is drawn
+  /// in that case.
+  final bool embedded;
 
   @override
   State<ManageServicesScreen> createState() => _ManageServicesScreenState();
@@ -174,58 +198,379 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
     }
   }
 
+  Widget _buildBody(BuildContext context, {required EdgeInsets listPadding}) {
+    return FutureBuilder<List<ServiceModel>>(
+      future: _servicesFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const _GlassStatePanel(
+            child: LoadingWidget(message: 'Loading services...'),
+          );
+        }
+        if (snapshot.hasError) {
+          return _GlassStatePanel(
+            child: ErrorState(
+              message: 'Unable to load services. Please try again.',
+              onRetry: _refresh,
+            ),
+          );
+        }
+
+        final services = snapshot.data ?? const <ServiceModel>[];
+        if (services.isEmpty) {
+          return _GlassStatePanel(
+            child: EmptyState(
+              title: 'No services yet',
+              message: 'Add your first laundry service to get started.',
+              icon: Icons.local_laundry_service_outlined,
+              actionLabel: 'Add Service',
+              onAction: _openAddDialog,
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: _refresh,
+          child: ListView.separated(
+            padding: listPadding,
+            itemCount: services.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 10),
+            itemBuilder: (context, index) {
+              final service = services[index];
+              return AdminServiceCard(
+                service: service,
+                isUpdating: _togglingServiceId == service.id,
+                onEdit: () => _openEditDialog(service),
+                onToggleStatus: () => _toggleStatus(service),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Embedded (a tab inside AdminDashboard): AdminDashboard already
+    // supplies the glass app bar and blue-blob background, so this
+    // just returns the content — a bare list/state-panel, with its
+    // own FAB anchored via a Stack since there's no Scaffold here to
+    // host a floatingActionButton.
+    if (widget.embedded) {
+      return Stack(
+        children: [
+          _buildBody(context, listPadding: const EdgeInsets.only(bottom: 96)),
+          Positioned(
+            right: 0,
+            bottom: 12,
+            child: _GlassFab(onPressed: _openAddDialog),
+          ),
+        ],
+      );
+    }
+
+    // Standalone route: draw the full glass shell (background + app
+    // bar), same as the other Admin screens.
+    final statusBarInset = MediaQuery.paddingOf(context).top;
+    final appBarTotalHeight = statusBarInset + _kAppBarContentHeight;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Manage Services')),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openAddDialog,
-        icon: const Icon(Icons.add),
-        label: const Text('Add Service'),
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: PreferredSize(
+        preferredSize: Size.fromHeight(appBarTotalHeight),
+        child: _ReportAppBar(title: 'Manage Services', onBack: () => Navigator.maybePop(context)),
       ),
-      body: SafeArea(
-        child: FutureBuilder<List<ServiceModel>>(
-          future: _servicesFuture,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const LoadingWidget(message: 'Loading services...');
-            }
-            if (snapshot.hasError) {
-              return ErrorState(
-                message: 'Unable to load services. Please try again.',
-                onRetry: _refresh,
-              );
-            }
-
-            final services = snapshot.data ?? const <ServiceModel>[];
-            if (services.isEmpty) {
-              return EmptyState(
-                title: 'No services yet',
-                message: 'Add your first laundry service to get started.',
-                icon: Icons.local_laundry_service_outlined,
-                actionLabel: 'Add Service',
-                onAction: _openAddDialog,
-              );
-            }
-
-            return RefreshIndicator(
-              onRefresh: _refresh,
-              child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
-                itemCount: services.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, index) {
-                  final service = services[index];
-                  return AdminServiceCard(
-                    service: service,
-                    isUpdating: _togglingServiceId == service.id,
-                    onEdit: () => _openEditDialog(service),
-                    onToggleStatus: () => _toggleStatus(service),
-                  );
-                },
+      body: Stack(
+        children: [
+          const Positioned.fill(child: _ReportBackground()),
+          SafeArea(
+            top: false,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 960),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16, appBarTotalHeight + 14, 16, 0),
+                  child: _buildBody(context, listPadding: const EdgeInsets.only(bottom: 96)),
+                ),
               ),
-            );
-          },
+            ),
+          ),
+          Positioned(
+            right: 20,
+            bottom: 20,
+            child: _GlassFab(onPressed: _openAddDialog),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Frosted "Add Service" FAB — a rounded glass pill instead of the
+/// default solid [FloatingActionButton.extended], matching the rest
+/// of this section's blurred-glass buttons.
+class _GlassFab extends StatelessWidget {
+  const _GlassFab({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Material(
+          color: colorScheme.primary.withValues(alpha: 0.85),
+          child: InkWell(
+            onTap: onPressed,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                boxShadow: [
+                  BoxShadow(
+                    color: colorScheme.primary.withValues(alpha: 0.35),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.add, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Add Service',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Wraps a loading/error/empty state widget in a glass panel so it
+/// still reads as belonging to this screen's frosted-glass
+/// background instead of floating as a bare opaque block.
+class _GlassStatePanel extends StatelessWidget {
+  const _GlassStatePanel({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: GlassContainer(
+        padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 16),
+        borderRadius: 24,
+        child: child,
+      ),
+    );
+  }
+}
+
+/// -----------------------------------------------------------------
+/// Shared glass shell pieces (background blobs, app bar) — only used
+/// when this screen is NOT embedded. Same look as
+/// [AdminDashboard]/[AdminNotificationsScreen]/the report screens,
+/// duplicated here (private to this file) so this screen doesn't
+/// depend on those files directly.
+/// -----------------------------------------------------------------
+
+class _ReportBackground extends StatelessWidget {
+  const _ReportBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: const Color(0xfff4f6fb),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned(
+            top: -90,
+            right: -70,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xff0D47A1), Color(0xffB3E5FC)],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 260,
+            left: -90,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xff0D47A1).withValues(alpha: 0.55),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: -60,
+            right: -50,
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xff8EC5FC).withValues(alpha: 0.45),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Minimal glass app bar: back button + title, same blur/border
+/// treatment as the Admin section's other app bars.
+class _ReportAppBar extends StatelessWidget {
+  const _ReportAppBar({required this.title, required this.onBack});
+
+  final String title;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return ClipRRect(
+      borderRadius: const BorderRadius.only(
+        bottomLeft: Radius.circular(24),
+        bottomRight: Radius.circular(24),
+      ),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.18),
+            borderRadius: const BorderRadius.only(
+              bottomLeft: Radius.circular(24),
+              bottomRight: Radius.circular(24),
+            ),
+            border: Border(
+              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.5), width: 1),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: colorScheme.primary.withValues(alpha: 0.10),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: SizedBox(
+              height: _kAppBarContentHeight,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    _GlassIconButton(
+                      icon: Icons.arrow_back_rounded,
+                      tooltip: 'Back',
+                      onPressed: onBack,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.black87,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.1,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small circular glass button — same treatment used across the rest
+/// of the Admin section's app bars.
+class _GlassIconButton extends StatelessWidget {
+  const _GlassIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(100),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.25),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+          ),
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            tooltip: tooltip,
+            icon: Icon(icon, color: Colors.black87, size: 19),
+            onPressed: onPressed,
+          ),
         ),
       ),
     );
