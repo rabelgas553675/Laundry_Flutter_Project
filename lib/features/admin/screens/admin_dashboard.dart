@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../../app/routes.dart';
@@ -14,9 +15,12 @@ import '../../../core/widgets/status_badge.dart';
 import '../../../core/utils/service_unit.dart';
 import '../../../data/repositories/order_repository.dart';
 import '../../../data/repositories/user_repository.dart';
+import '../../../data/services/notification_service.dart';
+import '../../../models/notification_model.dart';
 import '../../../models/order_model.dart';
 import '../../../models/user_model.dart';
 import '../widgets/dashboard_stat_card.dart';
+import 'admin_order_details.dart';
 import 'manage_orders_screen.dart';
 import 'manage_promos_screen.dart';
 import 'manage_services_screen.dart';
@@ -51,31 +55,30 @@ const double _kAppBarContentHeight = 64;
 /// dashboard no longer surfaces its own entry point to it.
 ///
 /// ── LIVE NOTIFICATION BADGE (READ/UNREAD) ───────────────────────
-/// [AdminDashboard] keeps its own lightweight subscription to
-/// [OrderRepository.streamAllOrders] (separate from the one
-/// [_AdminHomeTab] owns for its own tab content) purely to drive the
-/// small red count badge on the bell icon in [_AdminAppBar].
+/// The bell icon's badge now uses the exact same architecture as
+/// [UserDashboard]'s `_UnreadNotificationsIcon`: it's a real,
+/// persisted unread count sourced from
+/// [NotificationService.streamUserNotifications], scoped to the
+/// signed-in admin's own uid — not a derived/in-memory diff over the
+/// orders list. Tapping the bell no longer "acknowledges" anything
+/// locally; read state is only ever changed by
+/// [NotificationService.markAsRead], the same as the customer-facing
+/// screen, so it persists across screens, sessions, and devices.
 ///
-/// The badge no longer just mirrors "how many orders are pending
-/// right now" — it now tracks UNREAD pending orders:
-/// - Every currently-pending order's id is kept in `_pendingOrderIds`
-///   as the stream updates (live, Firestore push).
-/// - `_acknowledgedOrderIds` holds every pending order id the admin
-///   has already "seen" (i.e. was pending the last time the bell was
-///   tapped).
-/// - The badge count is the SET DIFFERENCE: pending orders that are
-///   NOT yet acknowledged. So tapping the bell acknowledges every
-///   order that's pending at that instant → badge count drops to 0.
-///   The badge only climbs again once a genuinely NEW order (one
-///   whose id was never acknowledged) shows up in the pending set —
-///   exactly the "gone after tap, back only for new ones" behavior.
-/// - This is intentionally in-memory (not persisted) — it resets on
-///   app restart, same lifetime as the rest of this screen's state.
-///
-/// Two separate streams (one here, one in `_AdminHomeTab`) is
-/// intentional and cheap — Firestore snapshot listeners are
-/// deduplicated/cached per query under the hood, so this doesn't
-/// double the read cost.
+/// [_AdminDashboardState] also owns a background subscription
+/// ([_startAdminOrderWatch]) that is this dashboard's equivalent of
+/// [NotificationsScreen]'s `_startOrderStatusSync`: it watches
+/// [OrderRepository.streamAllOrders] and — because the Firestore
+/// `notifications` create rule requires
+/// `request.resource.data.userId == request.auth.uid` — self-writes a
+/// notification addressed to the signed-in admin
+/// ([NotificationService.notifyAdminOrderCreated] /
+/// [NotificationService.notifyAdminOrderReady]) the moment it observes
+/// a new order or an order becoming ready. This mirrors exactly how
+/// the customer's own app is what creates the customer's own status
+/// notifications — no Cloud Function or privileged write path exists
+/// in this project, so "the recipient's own client creates its own
+/// notifications" is the one architecture available, for both roles.
 ///
 /// Reachable only through the `adminDashboard` route, which
 /// [RoleGuard] (PART 05) already restricts to [UserRole.admin] — this
@@ -98,52 +101,100 @@ class _AdminDashboardState extends State<AdminDashboard> {
     'Manage Promos',
   ];
 
-  // Drives the bell icon's badge — see the class doc comment above.
-  final OrderRepository _badgeOrderRepository = OrderRepository();
-  StreamSubscription<List<OrderModel>>? _badgeSubscription;
+  // Background order→notification watcher — this dashboard's
+  // equivalent of NotificationsScreen's `_startOrderStatusSync`. Lives
+  // here (rather than inside AdminNotificationsScreen) so it keeps
+  // running for the admin's whole session, the same way the
+  // customer-facing watcher is kept alive by UserDashboard's
+  // IndexedStack.
+  final OrderRepository _watchOrderRepository = OrderRepository();
+  final NotificationService _notificationService = NotificationService();
+  StreamSubscription<List<OrderModel>>? _orderWatchSubscription;
+  String? _watchedAdminUserId;
 
-  // The id of every order that is currently `pending`, refreshed on
-  // every stream emission.
-  Set<String> _pendingOrderIds = {};
-
-  // The id of every pending order the admin has already "seen" (was
-  // pending at the moment the bell was last tapped). Anything in
-  // `_pendingOrderIds` but NOT in here is unread.
-  final Set<String> _acknowledgedOrderIds = {};
-
-  int _unreadCount = 0;
-
-  void _recomputeUnread() {
-    _unreadCount = _pendingOrderIds.difference(_acknowledgedOrderIds).length;
-  }
+  // This-session cache of "orderId|type" pairs already sent to
+  // NotificationService — a cheap first-pass filter, exactly like
+  // NotificationsScreen's `_handledStatusKeys`. NotificationService's
+  // own Firestore-level duplicate check is still the real guard.
+  final Set<String> _handledNotificationKeys = {};
 
   @override
   void initState() {
     super.initState();
-    _badgeSubscription = _badgeOrderRepository.streamAllOrders().listen(
-      (orders) {
-        if (!mounted) return;
-        final pendingIds = orders
-            .where((o) => o.status == OrderStatus.pending)
-            .map((o) => o.orderNumber)
-            .toSet();
+    _startAdminOrderWatch();
+  }
 
-        setState(() {
-          _pendingOrderIds = pendingIds;
-          _recomputeUnread();
-        });
-      },
-      // A badge is a "nice to have" — if the stream errors out, just
-      // leave the badge as-is rather than crashing the whole
-      // dashboard shell over it.
-      onError: (_) {},
-    );
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // The signed-in admin's uid isn't guaranteed to be set yet at
+    // initState time (AuthState may still be resolving), so re-check
+    // here too — same pattern NotificationsScreen uses.
+    _startAdminOrderWatch();
   }
 
   @override
   void dispose() {
-    _badgeSubscription?.cancel();
+    _orderWatchSubscription?.cancel();
     super.dispose();
+  }
+
+  /// Starts (or restarts, if the signed-in admin changed) the
+  /// background subscription that turns "a new order was placed" /
+  /// "an order became ready" into a real, persisted notification
+  /// addressed to this admin account.
+  void _startAdminOrderWatch() {
+    final adminUserId = AuthState.instance.firebaseUser?.uid;
+    if (adminUserId == null || adminUserId == _watchedAdminUserId) return;
+
+    _watchedAdminUserId = adminUserId;
+    _orderWatchSubscription?.cancel();
+    _handledNotificationKeys.clear();
+    _orderWatchSubscription = _watchOrderRepository.streamAllOrders().listen(
+      (orders) {
+        for (final order in orders) {
+          _maybeNotifyAdmin(order, adminUserId);
+        }
+      },
+      // A dropped connection here shouldn't crash the dashboard shell
+      // — the visible Notifications screen's own StreamBuilder is
+      // what tells the admin when something's wrong.
+      onError: (Object _) {},
+    );
+  }
+
+  /// Creates the admin-facing notification for [order]'s current
+  /// status, if it's one of the two moments an admin needs a heads-up
+  /// for (a brand-new order, or one that just became ready for
+  /// pickup) and one doesn't already exist. Called for every order on
+  /// every snapshot, but almost always a no-op thanks to
+  /// [_handledNotificationKeys] and, underneath that,
+  /// [NotificationService]'s own Firestore-level duplicate check.
+  void _maybeNotifyAdmin(OrderModel order, String adminUserId) {
+    final orderId = order.id;
+    if (orderId == null) return;
+
+    final NotificationType? type = switch (order.status) {
+      OrderStatus.pending => NotificationType.orderCreated,
+      OrderStatus.ready => NotificationType.ready,
+      _ => null,
+    };
+    if (type == null) return;
+
+    final key = '$orderId|${type.value}';
+    if (_handledNotificationKeys.contains(key)) return;
+    _handledNotificationKeys.add(key);
+
+    // Fire-and-forget: a failure here (offline, permission hiccup)
+    // shouldn't surface as an error on this dashboard — worst case,
+    // the key stays out of the cache and the next snapshot retries it.
+    final future = type == NotificationType.orderCreated
+        ? _notificationService.notifyAdminOrderCreated(order: order, adminUserId: adminUserId)
+        : _notificationService.notifyAdminOrderReady(order: order, adminUserId: adminUserId);
+    future.catchError((Object _) {
+      _handledNotificationKeys.remove(key);
+      return null;
+    });
   }
 
   Future<void> _handleLogout(BuildContext context) async {
@@ -156,16 +207,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
-  // Bell icon: mark every currently-pending order as "seen" (so the
-  // badge clears to 0 right away — no waiting on Firestore), then
-  // push the real Notifications screen. The badge will only reappear
-  // once an order that wasn't in `_pendingOrderIds` at this moment
-  // shows up as pending.
+  // Bell icon: just push the real Notifications screen — read state
+  // is owned entirely by NotificationService/Firestore now, so there
+  // is nothing left for this dashboard to "acknowledge" locally.
   void _handleNotificationsTap(BuildContext context) {
-    setState(() {
-      _acknowledgedOrderIds.addAll(_pendingOrderIds);
-      _recomputeUnread();
-    });
     Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => const AdminNotificationsScreen()),
     );
@@ -195,20 +240,44 @@ class _AdminDashboardState extends State<AdminDashboard> {
       const ManagePromosScreen(embedded: true),
     ];
 
+    final adminUserId = AuthState.instance.firebaseUser?.uid;
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       extendBody: true,
       extendBodyBehindAppBar: true,
       appBar: PreferredSize(
         preferredSize: Size.fromHeight(appBarTotalHeight),
-        child: _AdminAppBar(
-          title: _tabTitles[_navIndex],
-          canPop: canPop,
-          notificationCount: _unreadCount,
-          onBack: () => Navigator.maybePop(context),
-          onNotifications: () => _handleNotificationsTap(context),
-          onLogout: () => _handleLogout(context),
-        ),
+        child: adminUserId == null
+            ? _AdminAppBar(
+                title: _tabTitles[_navIndex],
+                canPop: canPop,
+                notificationCount: 0,
+                onBack: () => Navigator.maybePop(context),
+                onNotifications: () => _handleNotificationsTap(context),
+                onLogout: () => _handleLogout(context),
+              )
+            : StreamBuilder<List<NotificationModel>>(
+                // Same architecture as UserDashboard's
+                // `_UnreadNotificationsIcon`: the badge count is a
+                // live count of `!isRead` documents in the real
+                // `notifications` collection, scoped to this admin's
+                // own uid — not a locally-tracked diff.
+                stream: _notificationService.streamUserNotifications(adminUserId),
+                builder: (context, snapshot) {
+                  final unreadCount = (snapshot.data ?? const <NotificationModel>[])
+                      .where((n) => !n.isRead)
+                      .length;
+                  return _AdminAppBar(
+                    title: _tabTitles[_navIndex],
+                    canPop: canPop,
+                    notificationCount: unreadCount,
+                    onBack: () => Navigator.maybePop(context),
+                    onNotifications: () => _handleNotificationsTap(context),
+                    onLogout: () => _handleLogout(context),
+                  );
+                },
+              ),
       ),
       body: Stack(
         children: [
@@ -919,12 +988,12 @@ class _DashboardContentState extends State<_DashboardContent> {
         orders.where((o) => o.status == OrderStatus.pending).length;
 
     final totalRevenue = orders
-        .where((o) => o.status == OrderStatus.completed)
-        .fold<double>(0, (sum, o) => sum + o.total);
+    .where((o) => o.status == OrderStatus.completed)
+    .fold<double>(0, (runningTotal, o) => runningTotal + o.total);
 
     // Stat cards and the Order Status Summary always reflect the full,
     // unfiltered data — only the Notifications list below narrows down
-    // as the admin types, same as search elsewhere in this app never
+    // as the admin types, same as search elsewhere in this app never       
     // hides aggregate totals, only the browsable list under them.
     final isSearching = _query.trim().isNotEmpty;
     final recentOrders = _filterOrders(orders, _query).take(5).toList();
@@ -1344,81 +1413,130 @@ String _formatShortDate(DateTime? date) {
 /// Notifications screen, pushed when the bell icon is tapped.
 /// -----------------------------------------------------------------
 ///
-/// Reuses [OrderRepository] to build a simple activity feed out of
-/// pending / ready orders (the two states an admin actually needs to
-/// act on) — no new backend model or collection required. Swap the
-/// `_buildNotifications` logic out later for a real notifications
-/// collection/stream if/when one exists; the screen's shell (app bar,
-/// background, list styling) can stay exactly as-is.
+/// Same notification architecture as the customer-facing
+/// [NotificationsScreen] — [NotificationModel] +
+/// [NotificationService], not a screen-local re-derivation of the
+/// orders list:
 ///
-/// The read/unread badge logic lives one level up in
-/// [_AdminDashboardState] (it has to — the badge on the bell needs to
-/// survive this screen being popped), so this screen itself doesn't
-/// need to know anything about "read" state; it just shows the feed.
+/// * **Display** — a real-time list of this admin account's own
+///   notifications via [NotificationService.streamUserNotifications],
+///   scoped to the signed-in admin's uid exactly the way the
+///   customer screen scopes to the customer's uid. The *creation* of
+///   those notifications (a new order arriving, an order becoming
+///   ready) happens in the background in [_AdminDashboardState]
+///   (`_startAdminOrderWatch`) — the same "watcher lives above this
+///   screen so it survives the screen being popped" split the
+///   customer app uses (there it's [NotificationsScreen] itself that
+///   owns the watcher, because nothing above it needs to keep
+///   running independently; here [AdminDashboard] already needs to
+///   keep the watcher alive for the bell badge, so this screen simply
+///   doesn't duplicate it).
+/// * **Read state** — persisted in Firestore via
+///   [NotificationService.markAsRead], never a local in-memory set.
+///   Tapping a notification here behaves exactly like tapping one on
+///   the customer screen.
+/// * **Navigation** — tapping a notification loads the linked order
+///   ([OrderRepository.getOrderByDocId]) and opens the admin's own
+///   order-detail screen for it, the admin equivalent of the customer
+///   screen opening [OrderDetailsScreen].
+///
+/// This screen owns no notification-service logic of its own — it
+/// only subscribes, renders, and delegates back to
+/// [NotificationService]/[OrderRepository].
 class AdminNotificationsScreen extends StatefulWidget {
-  const AdminNotificationsScreen({super.key});
+  const AdminNotificationsScreen({
+    super.key,
+    this.notificationService,
+    this.orderRepository,
+  });
+
+  /// Injectable for widget tests; defaults to a real
+  /// [NotificationService]/[OrderRepository] backed by live Firestore
+  /// — same pattern [NotificationsScreen] uses.
+  final NotificationService? notificationService;
+  final OrderRepository? orderRepository;
 
   @override
   State<AdminNotificationsScreen> createState() => _AdminNotificationsScreenState();
 }
 
 class _AdminNotificationsScreenState extends State<AdminNotificationsScreen> {
-  final OrderRepository _orderRepository = OrderRepository();
-  late Stream<List<OrderModel>> _ordersStream = _orderRepository.streamAllOrders();
+  late final NotificationService _notificationService =
+      widget.notificationService ?? NotificationService();
+  late final OrderRepository _orderRepository = widget.orderRepository ?? OrderRepository();
 
-  // Ids of notification entries the admin has tapped — drives the
-  // "slightly dark = already read" dimmed look on each tile below.
-  // Purely local to this screen (in-memory): it resets if the screen
-  // is popped and reopened, which is fine since reopening it re-marks
-  // the bell's badge as seen anyway (see AdminDashboard).
-  final Set<String> _readIds = {};
+  /// Subscribed once — not created inline in `build()` — so a
+  /// `StreamBuilder` rebuild doesn't hand it a brand-new `Stream`
+  /// object and force a needless resubscribe. Same reasoning as
+  /// [NotificationsScreen]'s `_notificationsStream`.
+  Stream<List<NotificationModel>>? _notificationsStream;
+  String? _streamedAdminUserId;
 
-  void _retry() {
-    setState(() => _ordersStream = _orderRepository.streamAllOrders());
+  bool _isMarkingRead = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final adminUserId = AuthState.instance.firebaseUser?.uid;
+    if (adminUserId != null && adminUserId != _streamedAdminUserId) {
+      _streamedAdminUserId = adminUserId;
+      _notificationsStream = _notificationService.streamUserNotifications(adminUserId);
+    }
   }
 
-  void _handleTileTap(String id) {
-    setState(() => _readIds.add(id));
-  }
+  Future<void> _openNotification(NotificationModel notification) async {
+    if (_isMarkingRead) return;
 
-  /// Turns the live order list into notification-style entries:
-  /// pending orders ("needs action") first, then ready-for-pickup
-  /// orders, newest first within each group.
-  List<_NotificationEntry> _buildNotifications(List<OrderModel> orders) {
-    final pending = orders.where((o) => o.status == OrderStatus.pending).toList()
-      ..sort((a, b) => (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
-    final ready = orders.where((o) => o.status == OrderStatus.ready).toList()
-      ..sort((a, b) => (b.createdAt ?? DateTime(0)).compareTo(a.createdAt ?? DateTime(0)));
+    if (!notification.isRead && notification.notificationId != null) {
+      setState(() => _isMarkingRead = true);
+      try {
+        await _notificationService.markAsRead(notification.notificationId!);
+      } catch (_) {
+        // Non-fatal — the notification just stays marked unread; the
+        // admin can still open the order below.
+      } finally {
+        if (mounted) setState(() => _isMarkingRead = false);
+      }
+    }
 
-    return [
-      for (final o in pending)
-        _NotificationEntry(
-          // Prefixed by type so the same order showing up as both a
-          // "needs review" and a "ready for pickup" entry gets two
-          // distinct, independently-tappable ids.
-          id: 'pending-${o.orderNumber}',
-          icon: Icons.timer_outlined,
-          iconColor: const Color(0xffF5A623),
-          title: 'New order needs review',
-          subtitle: '${o.orderNumber} · ${o.serviceName}',
-          time: o.createdAt,
-        ),
-      for (final o in ready)
-        _NotificationEntry(
-          id: 'ready-${o.orderNumber}',
-          icon: Icons.checkroom_outlined,
-          iconColor: const Color(0xff8B5CF6),
-          title: 'Order ready for pickup',
-          subtitle: '${o.orderNumber} · ${o.serviceName}',
-          time: o.createdAt,
-        ),
-    ];
+    if (!mounted) return;
+
+    if (notification.orderId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This notification has no linked order.')),
+      );
+      return;
+    }
+
+    OrderModel? order;
+    try {
+      order = await _orderRepository.getOrderByDocId(notification.orderId);
+    } on FirebaseException {
+      order = null;
+    }
+
+    if (!mounted) return;
+
+    if (order == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That order could not be found.')),
+      );
+      return;
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AdminOrderDetailsScreen(order: order!)),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final statusBarInset = MediaQuery.paddingOf(context).top;
     final appBarTotalHeight = statusBarInset + _kAppBarContentHeight;
+
+    final adminUserId = AuthState.instance.firebaseUser?.uid;
+    final stream = _notificationsStream;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -1437,50 +1555,57 @@ class _AdminNotificationsScreenState extends State<AdminNotificationsScreen> {
                 constraints: const BoxConstraints(maxWidth: 960),
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(16, appBarTotalHeight + 14, 16, 16),
-                  child: StreamBuilder<List<OrderModel>>(
-                    stream: _ordersStream,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.waiting) {
-                        return const _GlassStatePanel(
-                          child: LoadingWidget(message: 'Loading notifications...'),
-                        );
-                      }
-                      if (snapshot.hasError) {
-                        return _GlassStatePanel(
+                  child: adminUserId == null || stream == null
+                      ? const _GlassStatePanel(
                           child: ErrorState(
-                            message: 'Unable to load notifications. Please try again.',
-                            onRetry: _retry,
+                            message: 'Your session has expired. Please log in again.',
                           ),
-                        );
-                      }
+                        )
+                      : StreamBuilder<List<NotificationModel>>(
+                          stream: stream,
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return const _GlassStatePanel(
+                                child: LoadingWidget(message: 'Loading notifications...'),
+                              );
+                            }
+                            if (snapshot.hasError) {
+                              return _GlassStatePanel(
+                                child: ErrorState(
+                                  message: 'Unable to load notifications. Please try again.',
+                                  onRetry: () => setState(() {
+                                    _notificationsStream =
+                                        _notificationService.streamUserNotifications(adminUserId);
+                                  }),
+                                ),
+                              );
+                            }
 
-                      final orders = snapshot.data ?? const <OrderModel>[];
-                      final notifications = _buildNotifications(orders);
+                            final notifications = snapshot.data ?? const <NotificationModel>[];
 
-                      if (notifications.isEmpty) {
-                        return const _GlassStatePanel(
-                          child: EmptyState(
-                            title: 'No notifications',
-                            message: "You're all caught up.",
-                            icon: Icons.notifications_none_rounded,
-                          ),
-                        );
-                      }
+                            if (notifications.isEmpty) {
+                              return const _GlassStatePanel(
+                                child: EmptyState(
+                                  title: 'No notifications',
+                                  message: "You're all caught up.",
+                                  icon: Icons.notifications_none_rounded,
+                                ),
+                              );
+                            }
 
-                      return ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        itemCount: notifications.length,
-                        itemBuilder: (context, index) {
-                          final entry = notifications[index];
-                          return _NotificationTile(
-                            entry: entry,
-                            isRead: _readIds.contains(entry.id),
-                            onTap: () => _handleTileTap(entry.id),
-                          );
-                        },
-                      );
-                    },
-                  ),
+                            return ListView.builder(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              itemCount: notifications.length,
+                              itemBuilder: (context, index) {
+                                final notification = notifications[index];
+                                return _NotificationTile(
+                                  notification: notification,
+                                  onTap: () => _openNotification(notification),
+                                );
+                              },
+                            );
+                          },
+                        ),
                 ),
               ),
             ),
@@ -1567,48 +1692,65 @@ class _NotificationsAppBar extends StatelessWidget {
   }
 }
 
-/// One notification's display data.
-class _NotificationEntry {
-  const _NotificationEntry({
-    required this.id,
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.subtitle,
-    required this.time,
-  });
-
-  // Stable identity for this notification (type + order number) —
-  // used as the key for read/unread tracking up in
-  // [_AdminNotificationsScreenState._readIds].
-  final String id;
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String subtitle;
-  final DateTime? time;
+/// Icon + tint for each [NotificationType], for the admin's glass
+/// tile below. Mirrors the customer-facing [NotificationsScreen]'s
+/// `_NotificationTile._iconFor`, with an admin-appropriate icon set
+/// (order-created and ready are the two an admin watcher actually
+/// fires, but every type is covered so the tile never has to guess).
+IconData _adminNotificationIcon(NotificationType type) {
+  switch (type) {
+    case NotificationType.orderCreated:
+      return Icons.timer_outlined;
+    case NotificationType.received:
+      return Icons.inventory_2_outlined;
+    case NotificationType.washing:
+      return Icons.local_laundry_service_outlined;
+    case NotificationType.drying:
+      return Icons.dry_outlined;
+    case NotificationType.ready:
+      return Icons.checkroom_outlined;
+    case NotificationType.completed:
+      return Icons.task_alt_outlined;
+  }
 }
 
-/// Tappable notification row. Tapping it marks it read: a translucent
-/// dark scrim fades in over the glass card and the text dims, so a
-/// read notification visibly sits "behind glass" compared to an
-/// unread one — the tap itself is handled by the parent screen (it
-/// owns which ids are read), this widget just renders whichever state
-/// it's told.
+Color _adminNotificationColor(NotificationType type) {
+  switch (type) {
+    case NotificationType.orderCreated:
+      return const Color(0xffF5A623);
+    case NotificationType.ready:
+      return const Color(0xff8B5CF6);
+    case NotificationType.received:
+    case NotificationType.washing:
+    case NotificationType.drying:
+    case NotificationType.completed:
+      return const Color(0xff2E7D32);
+  }
+}
+
+/// Tappable notification row, driven entirely by a [NotificationModel]
+/// — same data source as the customer-facing screen's tile, just
+/// styled to match this app's glass-card look. Tapping it is handled
+/// by the parent screen (it's what calls
+/// [NotificationService.markAsRead] and navigates), this widget only
+/// renders whichever `isRead` state the model already carries: a
+/// translucent dark scrim fades in over the glass card and the text
+/// dims, so a read notification visibly sits "behind glass" compared
+/// to an unread one.
 class _NotificationTile extends StatelessWidget {
   const _NotificationTile({
-    required this.entry,
-    required this.isRead,
+    required this.notification,
     required this.onTap,
   });
 
-  final _NotificationEntry entry;
-  final bool isRead;
+  final NotificationModel notification;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final isRead = notification.isRead;
+    final iconColor = _adminNotificationColor(notification.type);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -1629,13 +1771,13 @@ class _NotificationTile extends StatelessWidget {
                       width: 40,
                       height: 40,
                       decoration: BoxDecoration(
-                        color: entry.iconColor.withValues(alpha: isRead ? 0.08 : 0.15),
+                        color: iconColor.withValues(alpha: isRead ? 0.08 : 0.15),
                         shape: BoxShape.circle,
                       ),
                       child: Icon(
-                        entry.icon,
+                        _adminNotificationIcon(notification.type),
                         size: 20,
-                        color: isRead ? entry.iconColor.withValues(alpha: 0.55) : entry.iconColor,
+                        color: isRead ? iconColor.withValues(alpha: 0.55) : iconColor,
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -1644,7 +1786,7 @@ class _NotificationTile extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            entry.title,
+                            notification.title,
                             style: textTheme.titleSmall?.copyWith(
                               fontWeight: FontWeight.w700,
                               color: isRead ? Colors.black54 : Colors.black87,
@@ -1652,7 +1794,7 @@ class _NotificationTile extends StatelessWidget {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            entry.subtitle,
+                            '${notification.message}\n${notification.orderNumber}',
                             style: textTheme.bodyMedium?.copyWith(
                               color: isRead ? Colors.black38 : Colors.black54,
                             ),
@@ -1662,7 +1804,7 @@ class _NotificationTile extends StatelessWidget {
                     ),
                     const SizedBox(width: 12),
                     Text(
-                      _formatShortDate(entry.time),
+                      _formatShortDate(notification.createdAt),
                       style: textTheme.bodySmall?.copyWith(
                         color: isRead ? Colors.black26 : Colors.black45,
                       ),
@@ -1670,9 +1812,11 @@ class _NotificationTile extends StatelessWidget {
                   ],
                 ),
               ),
-              // Dark scrim — fades in on tap, sits on top of the glass
-              // card without changing its own layout, so this is the
-              // one thing that visually says "already read".
+              // Dark scrim — fades in once `isRead` is true (persisted
+              // via NotificationService.markAsRead, not a local flag),
+              // sits on top of the glass card without changing its own
+              // layout, so this is the one thing that visually says
+              // "already read".
               AnimatedOpacity(
                 duration: const Duration(milliseconds: 200),
                 opacity: isRead ? 1 : 0,

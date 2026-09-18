@@ -120,13 +120,39 @@ service cloud.firestore {
     }
 
     // ---------- notifications/{notificationId} ----------
+    // One shared collection for both customer and admin notifications
+    // — an admin notification is just a NotificationModel document
+    // whose `userId` happens to be the signed-in admin's own uid (see
+    // NotificationService.notifyAdminOrderCreated/notifyAdminOrderReady
+    // and AdminDashboard's `_startAdminOrderWatch`), not a different
+    // collection or a different rule shape.
+    //
+    // SECURITY FIX — the previous rule OR'd in `isAdmin()` on read,
+    // update, and delete, which let any admin read/edit/erase *any*
+    // customer's private notifications, not just their own. Nothing in
+    // the app ever needs that: every query in NotificationService
+    // (getUserNotifications, streamUserNotifications, markAsRead) is
+    // filtered to `userId == <the signed-in caller's own uid>`,
+    // customer or admin alike, so `isAdmin()` here was pure unused
+    // attack surface, not a real requirement. Ownership by
+    // `resource.data.userId` is now the only path to read/update/
+    // delete a notification, for both roles.
     match /notifications/{notificationId} {
-      allow read: if isSignedIn() &&
-        (resource.data.userId == request.auth.uid || isAdmin());
+      allow read, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
       allow create: if isSignedIn() &&
         request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isSignedIn() &&
-        (resource.data.userId == request.auth.uid || isAdmin());
+
+      // SECURITY FIX — `allow update` previously had no field-level
+      // check at all, so the owner of a notification (customer or
+      // admin) could rewrite `title`/`message`/`type`/`orderId`/
+      // `userId` on their own document, not just flip `isRead`.
+      // NotificationService.markAsRead only ever sends
+      // `{'isRead': true}` — this rule now enforces that an update can
+      // touch `isRead` and nothing else, so "mark as read" is the only
+      // update this collection's owner can actually perform.
+      allow update: if isSignedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
     }
 
     // ---------- promos/{promoId} ----------

@@ -846,7 +846,7 @@ class _HomeTabState extends State<_HomeTab> {
   final TextEditingController _searchController = TextEditingController();
 
   String _query = '';
-  late Future<List<ServiceModel>> _servicesFuture = _loadServices();
+ late final Future<List<ServiceModel>> _servicesFuture = _loadServices();
 
   Future<List<ServiceModel>> _loadServices() async {
     await _repository.seedDefaultServicesIfEmpty();

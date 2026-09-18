@@ -125,6 +125,11 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
     // [_promosFuture] on every build. No manual reload needed.
     await _addPromoToList(createdPromo);
 
+    // The screen may have been disposed while the await above ran, so
+    // re-check before touching `context` again (this is the guard that
+    // satisfies `use_build_context_synchronously`).
+    if (!mounted) return;
+
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('Promotion created.')));
   }
@@ -186,7 +191,11 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
     } on sb.PostgrestException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message.isNotEmpty ? e.message : 'Unable to update this promotion.')),
+        SnackBar(
+          content: Text(
+            e.message.isNotEmpty ? e.message : 'Unable to update this promotion.',
+          ),
+        ),
       );
     } catch (_) {
       if (!mounted) return;
@@ -238,7 +247,11 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
     } on sb.PostgrestException catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message.isNotEmpty ? e.message : 'Unable to delete this promotion.')),
+        SnackBar(
+          content: Text(
+            e.message.isNotEmpty ? e.message : 'Unable to delete this promotion.',
+          ),
+        ),
       );
     } catch (_) {
       if (!mounted) return;

@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/widgets/empty_state.dart';
@@ -9,6 +11,8 @@ import '../../../models/order_model.dart';
 import '../../../models/user_model.dart';
 import '../widgets/admin_order_card.dart';
 import 'admin_order_details.dart';
+
+const Color _kBrandBlue = Color(0xFF0D47A1);
 
 /// PART 16 — Admin Order Management.
 ///
@@ -25,6 +29,9 @@ import 'admin_order_details.dart';
 /// (PART 05) already restricts to [UserRole.admin] — this screen does
 /// no role checking of its own — and also embedded directly as one of
 /// [AdminDashboard]'s bottom-nav tabs (see [embedded]).
+///
+/// Visual shell: frosted-glass background/app bar/search/tab pill,
+/// matching the language established in `admin_order_details.dart`.
 class ManageOrdersScreen extends StatefulWidget {
   const ManageOrdersScreen({
     super.key,
@@ -41,8 +48,9 @@ class ManageOrdersScreen extends StatefulWidget {
 
   /// When `true`, shown as one tab of [AdminDashboard]'s bottom-nav
   /// `IndexedStack` — no own `Scaffold`/`AppBar` is drawn in that
-  /// case, and the status [TabBar] moves into the body instead of
-  /// living in `AppBar.bottom` (there's no AppBar to hang it off of).
+  /// case, and the status tab pill moves into the body instead of
+  /// living in the glass app bar (there's no app bar to hang it off
+  /// of).
   final bool embedded;
 
   @override
@@ -51,8 +59,10 @@ class ManageOrdersScreen extends StatefulWidget {
 
 class _ManageOrdersScreenState extends State<ManageOrdersScreen>
     with SingleTickerProviderStateMixin {
-  late final OrderRepository _orderRepository = widget.orderRepository ?? OrderRepository();
-  late final UserRepository _userRepository = widget.userRepository ?? UserRepository();
+  late final OrderRepository _orderRepository =
+      widget.orderRepository ?? OrderRepository();
+  late final UserRepository _userRepository =
+      widget.userRepository ?? UserRepository();
 
   late final TabController _tabController;
   final TextEditingController _searchController = TextEditingController();
@@ -127,144 +137,291 @@ class _ManageOrdersScreenState extends State<ManageOrdersScreen>
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => AdminOrderDetailsScreen(order: order, customer: customer),
+        builder: (_) =>
+            AdminOrderDetailsScreen(order: order, customer: customer),
+      ),
+    );
+  }
+
+  Widget _buildGlassTabBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Container(
+        padding: const EdgeInsets.all(4),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.35),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.6)),
+        ),
+        child: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          dividerColor: Colors.transparent,
+          indicatorSize: TabBarIndicatorSize.tab,
+          indicator: BoxDecoration(
+            color: _kBrandBlue,
+            borderRadius: BorderRadius.circular(999),
+          ),
+          labelColor: Colors.white,
+          unselectedLabelColor: _kBrandBlue.withValues(alpha: 0.75),
+          tabs: _tabs.map((label) => Tab(text: label)).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchField() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.6)),
+      ),
+      child: TextField(
+        controller: _searchController,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          hintText: 'Search by order number, service, or customer',
+          prefixIcon: const Icon(Icons.search, color: _kBrandBlue),
+          suffixIcon: _query.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () => _searchController.clear(),
+                ),
+          isDense: true,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(
+            vertical: 14,
+            horizontal: 12,
+          ),
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    // Built once per build() and placed in exactly one of the two
-    // spots below (AppBar.bottom when standalone, inline in the body
-    // when embedded) — never both at once, so there's no duplicate
-    // widget-in-tree issue despite the single shared instance.
-    final tabBar = TabBar(
-      controller: _tabController,
-      isScrollable: true,
-      tabs: _tabs.map((label) => Tab(text: label)).toList(),
-    );
+    final tabBar = _buildGlassTabBar();
 
     return Scaffold(
-      backgroundColor: widget.embedded ? Colors.transparent : null,
+      backgroundColor: Colors.transparent,
       appBar: widget.embedded
           ? null
-          : AppBar(
-              title: const Text('Manage Orders'),
-              bottom: tabBar,
-            ),
-      body: SafeArea(
-        top: !widget.embedded,
-        child: Column(
-          children: [
-            // No AppBar to hang the TabBar off of when embedded, so
-            // it renders here instead, above the search field — same
-            // visual position it occupies via AppBar.bottom when
-            // standalone, just moved into the body.
-            if (widget.embedded)
-              Material(
-                color: Colors.transparent,
-                child: tabBar,
-              ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: TextField(
-                controller: _searchController,
-                textInputAction: TextInputAction.search,
-                decoration: InputDecoration(
-                  hintText: 'Search by order number, service, or customer',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _query.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: () => _searchController.clear(),
-                        ),
-                  isDense: true,
+          : _GlassAppBar(title: 'Manage Orders', tabBar: tabBar),
+      body: _OrdersBackground(
+        child: SafeArea(
+          top: !widget.embedded,
+          child: Column(
+            children: [
+              // No app bar to hang the tab pill off of when embedded,
+              // so it renders here instead, above the search field —
+              // same visual position it occupies in the glass app bar
+              // when standalone, just moved into the body.
+              if (widget.embedded) tabBar,
+              _buildSearchField(),
+              Expanded(
+                child: StreamBuilder<List<OrderModel>>(
+                  key: ValueKey('orders-$_retryToken'),
+                  stream: _orderRepository.streamAllOrders(),
+                  builder: (context, orderSnapshot) {
+                    if (orderSnapshot.connectionState ==
+                        ConnectionState.waiting) {
+                      return const LoadingWidget(message: 'Loading orders...');
+                    }
+                    if (orderSnapshot.hasError) {
+                      return ErrorState(
+                        message: 'Unable to load orders. Please try again.',
+                        onRetry: () => setState(() => _retryToken++),
+                      );
+                    }
+
+                    final orders = orderSnapshot.data ?? const <OrderModel>[];
+
+                    return StreamBuilder<List<UserModel>>(
+                      key: ValueKey('users-$_retryToken'),
+                      stream: _userRepository.streamAllUsers(),
+                      builder: (context, userSnapshot) {
+                        if (userSnapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const LoadingWidget(
+                            message: 'Loading customers...',
+                          );
+                        }
+                        if (userSnapshot.hasError) {
+                          return ErrorState(
+                            message: 'Unable to load customer information. Please try again.',
+                            onRetry: () => setState(() => _retryToken++),
+                          );
+                        }
+
+                        final users = userSnapshot.data ?? const <UserModel>[];
+                        final usersById = {for (final u in users) u.uid: u};
+
+                        if (orders.isEmpty) {
+                          return const EmptyState(
+                            title: 'No orders yet',
+                            message: 'Placed orders will show up here.',
+                            icon: Icons.receipt_long_outlined,
+                          );
+                        }
+
+                        return TabBarView(
+                          controller: _tabController,
+                          children: List.generate(_tabs.length, (tabIndex) {
+                            final byTab = _filterByTab(orders, tabIndex);
+                            final filtered = _filterBySearch(
+                              byTab,
+                              usersById,
+                              _query,
+                            );
+
+                            if (filtered.isEmpty) {
+                              return EmptyState(
+                                title: _query.isEmpty
+                                    ? 'No orders in this category yet.'
+                                    : 'No orders match your search.',
+                                icon: Icons.filter_list_off,
+                              );
+                            }
+
+                            return RefreshIndicator(
+                              onRefresh: () async => setState(() {}),
+                              child: ListView.separated(
+                                padding: const EdgeInsets.all(16),
+                                itemCount: filtered.length,
+                                separatorBuilder: (_, _) =>
+                                    const SizedBox(height: 10),
+                                itemBuilder: (context, index) {
+                                  final order = filtered[index];
+                                  final customer = usersById[order.userId];
+                                  return AdminOrderCard(
+                                    order: order,
+                                    customer: customer,
+                                    onTap: () => _openOrder(order, customer),
+                                  );
+                                },
+                              ),
+                            );
+                          }),
+                        );
+                      },
+                    );
+                  },
                 ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Soft gradient + blurred brand-blue blobs behind the list — same
+/// decorative language as [AdminOrderDetailsScreen]'s background.
+class _OrdersBackground extends StatelessWidget {
+  const _OrdersBackground({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? const [Color(0xFF0A1128), Color(0xFF0D1B3E)]
+                  : const [Color(0xFFEAF2FF), Color(0xFFF7FAFF)],
             ),
-            Expanded(
-              child: StreamBuilder<List<OrderModel>>(
-                key: ValueKey('orders-$_retryToken'),
-                stream: _orderRepository.streamAllOrders(),
-                builder: (context, orderSnapshot) {
-                  if (orderSnapshot.connectionState == ConnectionState.waiting) {
-                    return const LoadingWidget(message: 'Loading orders...');
-                  }
-                  if (orderSnapshot.hasError) {
-                    return ErrorState(
-                      message: 'Unable to load orders. Please try again.',
-                      onRetry: () => setState(() => _retryToken++),
-                    );
-                  }
+          ),
+        ),
+        Positioned(
+          top: -80,
+          right: -60,
+          child: _blob(
+            _kBrandBlue.withValues(alpha: isDark ? 0.35 : 0.28),
+            220,
+          ),
+        ),
+        Positioned(
+          bottom: -110,
+          left: -70,
+          child: _blob(
+            const Color(0xFF64B5F6).withValues(alpha: isDark ? 0.28 : 0.22),
+            260,
+          ),
+        ),
+        child,
+      ],
+    );
+  }
 
-                  final orders = orderSnapshot.data ?? const <OrderModel>[];
+  Widget _blob(Color color, double size) {
+    return ImageFiltered(
+      imageFilter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+      ),
+    );
+  }
+}
 
-                  return StreamBuilder<List<UserModel>>(
-                    key: ValueKey('users-$_retryToken'),
-                    stream: _userRepository.streamAllUsers(),
-                    builder: (context, userSnapshot) {
-                      if (userSnapshot.connectionState == ConnectionState.waiting) {
-                        return const LoadingWidget(message: 'Loading customers...');
-                      }
-                      if (userSnapshot.hasError) {
-                        return ErrorState(
-                          message: 'Unable to load customer information. Please try again.',
-                          onRetry: () => setState(() => _retryToken++),
-                        );
-                      }
+/// Frosted glass app bar with the status tab pill built into its
+/// bottom edge, so the whole toolbar + tabs region reads as one
+/// glass surface.
+class _GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _GlassAppBar({required this.title, required this.tabBar});
 
-                      final users = userSnapshot.data ?? const <UserModel>[];
-                      final usersById = {for (final u in users) u.uid: u};
+  final String title;
+  final Widget tabBar;
 
-                      if (orders.isEmpty) {
-                        return const EmptyState(
-                          title: 'No orders yet',
-                          message: 'Placed orders will show up here.',
-                          icon: Icons.receipt_long_outlined,
-                        );
-                      }
+  @override
+  Size get preferredSize => Size.fromHeight(kToolbarHeight + 56);
 
-                      return TabBarView(
-                        controller: _tabController,
-                        children: List.generate(_tabs.length, (tabIndex) {
-                          final byTab = _filterByTab(orders, tabIndex);
-                          final filtered = _filterBySearch(byTab, usersById, _query);
-
-                          if (filtered.isEmpty) {
-                            return EmptyState(
-                              title: _query.isEmpty
-                                  ? 'No orders in this category yet.'
-                                  : 'No orders match your search.',
-                              icon: Icons.filter_list_off,
-                            );
-                          }
-
-                          return RefreshIndicator(
-                            onRefresh: () async => setState(() {}),
-                            child: ListView.separated(
-                              padding: const EdgeInsets.all(16),
-                              itemCount: filtered.length,
-                              separatorBuilder: (_, _) => const SizedBox(height: 10),
-                              itemBuilder: (context, index) {
-                                final order = filtered[index];
-                                final customer = usersById[order.userId];
-                                return AdminOrderCard(
-                                  order: order,
-                                  customer: customer,
-                                  onTap: () => _openOrder(order, customer),
-                                );
-                              },
-                            ),
-                          );
-                        }),
-                      );
-                    },
-                  );
-                },
-              ),
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.55),
+            border: Border(
+              bottom: BorderSide(color: Colors.white.withValues(alpha: 0.6)),
             ),
-          ],
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  height: kToolbarHeight,
+                  child: Center(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: _kBrandBlue,
+                        fontSize: 20,
+                      ),
+                    ),
+                  ),
+                ),
+                tabBar,
+              ],
+            ),
+          ),
         ),
       ),
     );

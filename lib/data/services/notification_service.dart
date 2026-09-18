@@ -246,6 +246,98 @@ class NotificationService {
     return createNotification(buildNotification(order: order, type: type));
   }
 
+  // -------------------- Admin recipient targeting --------------------
+
+  /// Admin-facing title text for each [NotificationType] this admin
+  /// watcher actually fires (see [notifyAdminOrderCreated] /
+  /// [notifyAdminOrderReady] below) — deliberately separate from
+  /// [_titles], which is written from the *customer's* point of view
+  /// ("Order Successfully Placed"). An admin recipient needs the
+  /// mirror-image phrasing ("New Order Received").
+  static const Map<NotificationType, String> _adminTitles = {
+    NotificationType.orderCreated: 'New Order Received',
+    NotificationType.ready: 'Order Ready for Pickup',
+  };
+
+  /// Admin-facing body text, mirroring [_messageFor] but written for
+  /// the admin reading it rather than the customer who placed the
+  /// order.
+  String _adminMessageFor(NotificationType type, String orderNumber) {
+    switch (type) {
+      case NotificationType.orderCreated:
+        return 'A new order $orderNumber has been placed and needs review.';
+      case NotificationType.ready:
+        return 'Order $orderNumber is ready for customer pickup.';
+      default:
+        return 'Order $orderNumber has been updated.';
+    }
+  }
+
+  /// Same shape as [buildNotification], except the recipient
+  /// ([NotificationModel.userId]) is [adminUserId] — the signed-in
+  /// admin account — rather than [OrderModel.userId] (the customer).
+  ///
+  /// This is the only structural difference between an admin
+  /// notification and a customer one: same model, same collection,
+  /// same [createNotification] write path, same duplicate check
+  /// (scoped by `userId + orderId + type`, so each admin account gets
+  /// its own copy and its own read/unread state for the same order).
+  NotificationModel _buildAdminNotification({
+    required OrderModel order,
+    required NotificationType type,
+    required String adminUserId,
+  }) {
+    final orderId = order.id;
+    if (orderId == null) {
+      throw ArgumentError(
+        'Cannot build a notification for an order with no document ID.',
+      );
+    }
+    return NotificationModel(
+      userId: adminUserId,
+      orderId: orderId,
+      orderNumber: order.orderNumber,
+      title: _adminTitles[type] ?? _titles[type]!,
+      message: _adminMessageFor(type, order.orderNumber),
+      type: type,
+      isRead: false,
+    );
+  }
+
+  /// Convenience wrapper, the admin-recipient equivalent of
+  /// [notifyOrderCreated]: fires once per order, for the admin
+  /// dashboard's "a new order needs review" moment. Duplicate-safe via
+  /// [createNotification], exactly like the customer-facing wrappers.
+  Future<NotificationModel?> notifyAdminOrderCreated({
+    required OrderModel order,
+    required String adminUserId,
+  }) {
+    return createNotification(
+      _buildAdminNotification(
+        order: order,
+        type: NotificationType.orderCreated,
+        adminUserId: adminUserId,
+      ),
+    );
+  }
+
+  /// Convenience wrapper, the admin-recipient equivalent of
+  /// [notifyStatusChange] — scoped to the one status transition an
+  /// admin needs a heads-up for: an order becoming [OrderStatus.ready]
+  /// for pickup. Duplicate-safe via [createNotification].
+  Future<NotificationModel?> notifyAdminOrderReady({
+    required OrderModel order,
+    required String adminUserId,
+  }) {
+    return createNotification(
+      _buildAdminNotification(
+        order: order,
+        type: NotificationType.ready,
+        adminUserId: adminUserId,
+      ),
+    );
+  }
+
   // -------------------- Read --------------------
 
   /// One-shot fetch of every notification belonging to [userId],

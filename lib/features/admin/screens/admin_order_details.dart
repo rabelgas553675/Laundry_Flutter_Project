@@ -1,9 +1,10 @@
+import 'dart:ui';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/price_calculator.dart';
 import '../../../core/utils/service_unit.dart';
-import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/error_state.dart';
 import '../../../core/widgets/loading_widget.dart';
 import '../../../data/repositories/order_repository.dart';
@@ -15,6 +16,8 @@ import '../../../services/printing_service.dart';
 import '../../user/widgets/order_items_breakdown.dart';
 import '../../user/widgets/order_list_tile.dart' show OrderStatusStyle, formatOrderDate;
 import '../widgets/report_actions_row.dart';
+
+const Color _kBrandBlue = Color(0xFF0D47A1);
 
 /// PART 16 — full Admin view of a single order: customer information,
 /// order details, delivery details, price breakdown, and status
@@ -35,6 +38,10 @@ import '../widgets/report_actions_row.dart';
 /// [OrderReceiptData.fromOrder] (using this screen's already-loaded
 /// [_customer]) and [PdfService]; this screen never lays out a PDF
 /// or talks to the `printing` package directly.
+///
+/// Visual shell: frosted-glass cards over a soft gradient + blurred
+/// brand-blue blobs, matching the language established in
+/// `order_summary_screen.dart` / `user_dashboard.dart`.
 class AdminOrderDetailsScreen extends StatefulWidget {
   const AdminOrderDetailsScreen({
     super.key,
@@ -101,25 +108,57 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
   Future<bool> _confirmCancel() async {
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cancel this order?'),
-        content: const Text(
-          'This will mark the order as cancelled. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Keep Order'),
-          ),
-          FilledButton.tonal(
-            style: FilledButton.styleFrom(
-              backgroundColor: Theme.of(context).colorScheme.errorContainer,
-              foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+      barrierColor: Colors.black.withValues(alpha: 0.25),
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.75),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.6)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Cancel this order?',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _kBrandBlue),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'This will mark the order as cancelled. This cannot be undone.',
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context, false),
+                        child: const Text('Keep Order'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton.tonal(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                          foregroundColor: Theme.of(context).colorScheme.onErrorContainer,
+                        ),
+                        onPressed: () => Navigator.pop(context, true),
+                        child: const Text('Cancel Order'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Cancel Order'),
           ),
-        ],
+        ),
       ),
     );
     return result ?? false;
@@ -196,65 +235,184 @@ class _AdminOrderDetailsScreenState extends State<AdminOrderDetailsScreen> {
     final orderId = widget.order.id;
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.order.orderNumber)),
-      body: SafeArea(
-        child: orderId == null
-            ? const ErrorState(
-                title: 'Order not found',
-                message: 'This order has no document ID and cannot be managed.',
-              )
-            : StreamBuilder<OrderModel?>(
-                stream: _orderStream,
-                initialData: widget.order,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting &&
-                      !snapshot.hasData) {
-                    return const LoadingWidget(message: 'Loading order...');
-                  }
-                  if (snapshot.hasError) {
-                    return const ErrorState(
-                      message: 'Unable to load this order. Please check your connection.',
-                    );
-                  }
+      backgroundColor: Colors.transparent,
+      appBar: _GlassAppBar(title: widget.order.orderNumber),
+      body: _DetailsBackground(
+        child: SafeArea(
+          child: orderId == null
+              ? const ErrorState(
+                  title: 'Order not found',
+                  message: 'This order has no document ID and cannot be managed.',
+                )
+              : StreamBuilder<OrderModel?>(
+                  stream: _orderStream,
+                  initialData: widget.order,
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting &&
+                        !snapshot.hasData) {
+                      return const LoadingWidget(message: 'Loading order...');
+                    }
+                    if (snapshot.hasError) {
+                      return const ErrorState(
+                        message: 'Unable to load this order. Please check your connection.',
+                      );
+                    }
 
-                  final order = snapshot.data;
-                  if (order == null) {
-                    return const ErrorState(
-                      title: 'Order not found',
-                      message: 'This order could not be found. It may have been removed.',
-                    );
-                  }
+                    final order = snapshot.data;
+                    if (order == null) {
+                      return const ErrorState(
+                        title: 'Order not found',
+                        message: 'This order could not be found. It may have been removed.',
+                      );
+                    }
 
-                  return ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      _CustomerInfoCard(
-                        customer: _customer,
-                        userId: order.userId,
-                        isLoading: _isLoadingCustomer,
-                      ),
-                      const SizedBox(height: 12),
-                      _OrderInfoCard(order: order),
-                      const SizedBox(height: 12),
-                      _DeliveryInfoCard(order: order),
-                      const SizedBox(height: 12),
-                      _PriceBreakdownCard(order: order),
-                      const SizedBox(height: 12),
-                      ReportActionsRow(
-                        isBusy: _isProcessingReceipt,
-                        onExport: () => _handleReceiptAction(order: order, openPrintDialog: false),
-                        onPrint: () => _handleReceiptAction(order: order, openPrintDialog: true),
-                      ),
-                      const SizedBox(height: 12),
-                      _StatusUpdateCard(
-                        order: order,
-                        isUpdating: _isUpdatingStatus,
-                        onSelectStatus: (status) => _updateStatus(order, status),
-                      ),
-                    ],
-                  );
-                },
+                    return ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                      children: [
+                        _CustomerInfoCard(
+                          customer: _customer,
+                          userId: order.userId,
+                          isLoading: _isLoadingCustomer,
+                        ),
+                        const SizedBox(height: 12),
+                        _OrderInfoCard(order: order),
+                        const SizedBox(height: 12),
+                        _DeliveryInfoCard(order: order),
+                        const SizedBox(height: 12),
+                        _PriceBreakdownCard(order: order),
+                        const SizedBox(height: 12),
+                        _GlassCard(
+                          child: ReportActionsRow(
+                            isBusy: _isProcessingReceipt,
+                            onExport: () => _handleReceiptAction(order: order, openPrintDialog: false),
+                            onPrint: () => _handleReceiptAction(order: order, openPrintDialog: true),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _StatusUpdateCard(
+                          order: order,
+                          isUpdating: _isUpdatingStatus,
+                          onSelectStatus: (status) => _updateStatus(order, status),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Soft gradient + blurred brand-blue blobs behind every card on this
+/// screen — the same decorative language as the rest of the app's
+/// frosted-glass screens.
+class _DetailsBackground extends StatelessWidget {
+  const _DetailsBackground({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? const [Color(0xFF0A1128), Color(0xFF0D1B3E)]
+                  : const [Color(0xFFEAF2FF), Color(0xFFF7FAFF)],
+            ),
+          ),
+        ),
+        Positioned(
+          top: -70,
+          left: -60,
+          child: _blob(_kBrandBlue.withValues(alpha: isDark ? 0.35 : 0.28), 220),
+        ),
+        Positioned(
+          bottom: -100,
+          right: -70,
+          child: _blob(const Color(0xFF64B5F6).withValues(alpha: isDark ? 0.28 : 0.22), 260),
+        ),
+        child,
+      ],
+    );
+  }
+
+  Widget _blob(Color color, double size) {
+    return ImageFiltered(
+      imageFilter: ImageFilter.blur(sigmaX: 80, sigmaY: 80),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+      ),
+    );
+  }
+}
+
+/// Frosted glass app bar — blurred backdrop, translucent fill, brand
+/// blue title/back button.
+class _GlassAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _GlassAppBar({required this.title});
+
+  final String title;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: AppBar(
+          title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700, color: _kBrandBlue)),
+          backgroundColor: Colors.white.withValues(alpha: 0.55),
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+          iconTheme: const IconThemeData(color: _kBrandBlue),
+          shape: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.6))),
+        ),
+      ),
+    );
+  }
+}
+
+/// Frosted glass card — replaces [AppCard] as this screen's shell.
+class _GlassCard extends StatelessWidget {
+  const _GlassCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            color: Colors.white.withValues(alpha: isDark ? 0.06 : 0.55),
+            border: Border.all(color: Colors.white.withValues(alpha: isDark ? 0.12 : 0.6)),
+            boxShadow: [
+              BoxShadow(
+                color: _kBrandBlue.withValues(alpha: 0.08),
+                blurRadius: 24,
+                offset: const Offset(0, 12),
               ),
+            ],
+          ),
+          child: child,
+        ),
       ),
     );
   }
@@ -313,14 +471,14 @@ class _CustomerInfoCard extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final colors = Theme.of(context).colorScheme;
 
-    return AppCard(
+    return _GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               CircleAvatar(
-                backgroundColor: colors.primaryContainer,
+                backgroundColor: _kBrandBlue.withValues(alpha: 0.15),
                 backgroundImage:
                     customer?.profileImageUrl != null ? NetworkImage(customer!.profileImageUrl!) : null,
                 child: customer?.profileImageUrl == null
@@ -369,7 +527,7 @@ class _OrderInfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = OrderStatusStyle.of(order.status);
-    return AppCard(
+    return _GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -442,13 +600,14 @@ class _DeliveryInfoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isPickup = order.isPickup;
-    return AppCard(
+    return _GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(isPickup ? Icons.delivery_dining_outlined : Icons.storefront_outlined, size: 20),
+              Icon(isPickup ? Icons.delivery_dining_outlined : Icons.storefront_outlined,
+                  size: 20, color: _kBrandBlue),
               const SizedBox(width: 8),
               Text(isPickup ? 'Pickup' : 'Drop-off', style: Theme.of(context).textTheme.titleMedium),
             ],
@@ -474,8 +633,7 @@ class _PriceBreakdownCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return AppCard(
+    return _GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -489,13 +647,13 @@ class _PriceBreakdownCard extends StatelessWidget {
             _Row(
               label: 'Discount',
               value: '-${PriceCalculator.formatCurrency(order.discount)}',
-              valueColor: colors.primary,
+              valueColor: _kBrandBlue,
             ),
           const Divider(height: 20),
           _Row(
             label: 'Total',
             value: PriceCalculator.formatCurrency(order.total),
-            valueColor: colors.primary,
+            valueColor: _kBrandBlue,
             valueWeight: FontWeight.w700,
           ),
         ],
@@ -531,7 +689,7 @@ class _StatusUpdateCard extends StatelessWidget {
         .toList()
       ..sort((a, b) => a.index.compareTo(b.index));
 
-    return AppCard(
+    return _GlassCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
