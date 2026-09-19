@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' as sb;
 
@@ -283,11 +285,7 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
               title: const Text('Manage Promotions'),
               bottom: tabBar,
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openAddScreen,
-        icon: const Icon(Icons.add),
-        label: const Text('Add Promo'),
-      ),
+      floatingActionButton: _GlassFab(onPressed: _openAddScreen),
       body: SafeArea(
         top: !widget.embedded,
         child: Column(
@@ -383,6 +381,63 @@ class _ManagePromosScreenState extends State<ManagePromosScreen>
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Frosted "Add Promo" FAB — a light glass pill (translucent white
+/// background with primary-colored icon/text) matching the same
+/// [_GlassFab] used on [ManageServicesScreen]'s "Add Service" button,
+/// in place of the default solid [FloatingActionButton.extended].
+class _GlassFab extends StatelessWidget {
+  const _GlassFab({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        child: Material(
+          color: Colors.white.withValues(alpha: 0.55),
+          child: InkWell(
+            onTap: onPressed,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(28),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.6)),
+                boxShadow: [
+                  BoxShadow(
+                    color: colorScheme.primary.withValues(alpha: 0.15),
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.add, color: colorScheme.primary, size: 20),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Add Promo',
+                    style: TextStyle(
+                      color: colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

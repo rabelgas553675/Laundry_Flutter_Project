@@ -39,11 +39,35 @@ class UserDashboard extends StatefulWidget {
   State<UserDashboard> createState() => _UserDashboardState();
 }
 
-class _UserDashboardState extends State<UserDashboard> {
+class _UserDashboardState extends State<UserDashboard>
+    with SingleTickerProviderStateMixin {
   int _navIndex = 0;
   bool _checkedPostLoginRedirect = false;
 
   final NotificationService _notificationService = NotificationService();
+
+  // One-shot "slide down into place" animation for the glass app bar
+  // — starts just off-screen above and eases into its resting spot
+  // the moment this dashboard mounts. Same treatment as
+  // AdminDashboard's app bar entrance.
+  late final AnimationController _appBarSlideController;
+  late final Animation<Offset> _appBarSlideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _appBarSlideController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _appBarSlideAnimation = Tween<Offset>(
+      begin: const Offset(0, -1),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(parent: _appBarSlideController, curve: Curves.easeOutCubic),
+    );
+    _appBarSlideController.forward();
+  }
 
   @override
   void didChangeDependencies() {
@@ -59,6 +83,12 @@ class _UserDashboardState extends State<UserDashboard> {
         Navigator.pushReplacementNamed(context, AppRoutes.adminDashboard);
       });
     }
+  }
+
+  @override
+  void dispose() {
+    _appBarSlideController.dispose();
+    super.dispose();
   }
 
   Future<void> _handleLogout(BuildContext context) async {
@@ -131,15 +161,20 @@ class _UserDashboardState extends State<UserDashboard> {
       extendBodyBehindAppBar: true,
       appBar: PreferredSize(
         preferredSize: Size.fromHeight(appBarTotalHeight),
-        child: _DashboardAppBar(
-          title: tabTitles[_navIndex],
-          userName: user?.name ?? '',
-          onLogout: () => _handleLogout(context),
-          // Tapping the profile avatar/name jumps straight to the
-          // Profile tab, same pattern as onSeeAllOffers/onSeeAllOrders
-          // above — no separate navigation route needed since Profile
-          // already lives in `tabs`.
-          onProfileTap: () => setState(() => _navIndex = _kProfileTabIndex),
+        // Slide the whole glass app bar down into place once, on
+        // first mount — see _appBarSlideController above.
+        child: SlideTransition(
+          position: _appBarSlideAnimation,
+          child: _DashboardAppBar(
+            title: tabTitles[_navIndex],
+            userName: user?.name ?? '',
+            onLogout: () => _handleLogout(context),
+            // Tapping the profile avatar/name jumps straight to the
+            // Profile tab, same pattern as onSeeAllOffers/onSeeAllOrders
+            // above — no separate navigation route needed since Profile
+            // already lives in `tabs`.
+            onProfileTap: () => setState(() => _navIndex = _kProfileTabIndex),
+          ),
         ),
       ),
       body: Stack(
@@ -346,7 +381,11 @@ class _DashboardAppBar extends StatelessWidget {
                     // icon — Alignment.centerLeft pins them to the
                     // start of this Expanded box regardless of their
                     // own intrinsic width, so they can never read as
-                    // floating with empty space before them.
+                    // floating with empty space before them. The
+                    // label itself is wrapped in a FittedBox (see
+                    // _BrandAppBarLabel) so on narrow screens it
+                    // scales down to fit this Expanded's width
+                    // instead of overflowing.
                     Expanded(
                       child: Align(
                         alignment: Alignment.centerLeft,
@@ -378,6 +417,20 @@ class _DashboardAppBar extends StatelessWidget {
 /// logo mark + "HYDRO" wordmark — so "Our Services", "Orders",
 /// "Offers", "Notifications" and "Profile" all carry the same brand
 /// lockup.
+///
+/// FIX: previously this only wrapped `_SlidingTitle` in a `Flexible`,
+/// which constrains max width but does nothing to actually shrink the
+/// content — so on narrow phones (title + divider + logo + "HYDRO" +
+/// profile pill + logout button together wider than the app bar) the
+/// Row overflowed, showing Flutter's yellow/black "OVERFLOWED BY x
+/// PIXELS" debug banner right through the middle of the label (see
+/// screenshots). The whole label Row is now wrapped in a `FittedBox`
+/// with `BoxFit.scaleDown`: at normal widths it renders at its natural
+/// 1:1 size exactly as before, but if the available width is too
+/// narrow it uniformly scales the entire title+divider+logo+HYDRO
+/// group down to fit instead of overflowing.  `alignment:
+/// Alignment.centerLeft` keeps it pinned to the left edge (matching
+/// the original layout) rather than centering when it shrinks.
 class _BrandAppBarLabel extends StatelessWidget {
   const _BrandAppBarLabel({
     super.key,
@@ -396,12 +449,18 @@ class _BrandAppBarLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Flexible(
-          child: _SlidingTitle(
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // No longer wrapped in Flexible — inside a FittedBox the
+          // child is measured at its natural/unconstrained size and
+          // then scaled as a whole, so Flexible here would just add
+          // an unnecessary (and potentially conflicting) constraint.
+          _SlidingTitle(
             text: title,
             style: const TextStyle(
               color: Colors.black87,
@@ -410,47 +469,47 @@ class _BrandAppBarLabel extends StatelessWidget {
               letterSpacing: 0.1,
             ),
           ),
-        ),
-        const SizedBox(width: 10),
-        // Thin divider so the tab title and the brand mark read as
-        // two related but distinct pieces, not run-together text.
-        Container(
-          width: 1,
-          height: 16,
-          color: Colors.black.withValues(alpha: 0.15),
-        ),
-        const SizedBox(width: 10),
-        SizedBox(
-          width: logoHeight * _logoAspectRatio,
-          height: logoHeight,
-          child: Image.asset(
-            logoAsset,
-            alignment: Alignment.centerLeft,
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) {
-              return const Align(
-                alignment: Alignment.centerLeft,
-                child: Icon(
-                  Icons.local_laundry_service_outlined,
-                  size: 20,
-                  color: Colors.black45,
-                ),
-              );
-            },
+          const SizedBox(width: 10),
+          // Thin divider so the tab title and the brand mark read as
+          // two related but distinct pieces, not run-together text.
+          Container(
+            width: 1,
+            height: 16,
+            color: Colors.black.withValues(alpha: 0.15),
           ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          'HYDRO',
-          style: TextStyle(
-            fontSize: logoHeight * 0.54,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.4,
-            height: 1.0,
-            color: const Color(0xff2E75B6),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: logoHeight * _logoAspectRatio,
+            height: logoHeight,
+            child: Image.asset(
+              logoAsset,
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Icon(
+                    Icons.local_laundry_service_outlined,
+                    size: 20,
+                    color: Colors.black45,
+                  ),
+                );
+              },
+            ),
           ),
-        ),
-      ],
+          const SizedBox(width: 6),
+          Text(
+            'HYDRO',
+            style: TextStyle(
+              fontSize: logoHeight * 0.54,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+              height: 1.0,
+              color: const Color(0xff2E75B6),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -846,7 +905,7 @@ class _HomeTabState extends State<_HomeTab> {
   final TextEditingController _searchController = TextEditingController();
 
   String _query = '';
- late final Future<List<ServiceModel>> _servicesFuture = _loadServices();
+  late final Future<List<ServiceModel>> _servicesFuture = _loadServices();
 
   Future<List<ServiceModel>> _loadServices() async {
     await _repository.seedDefaultServicesIfEmpty();

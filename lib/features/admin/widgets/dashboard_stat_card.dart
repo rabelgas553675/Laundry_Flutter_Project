@@ -98,21 +98,34 @@ class DashboardStatCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Text(
-            value,
-            style: textTheme.headlineSmall?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: Colors.black87,
+          // FIX: wrapped in FittedBox(scaleDown) so the value shrinks
+          // to fit the card's width instead of being cut off with an
+          // ellipsis (e.g. "₱5,9..." now renders as "₱5,680" at a
+          // slightly smaller size when the card is narrow).
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              style: textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: Colors.black87,
+              ),
+              maxLines: 1,
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 2),
-          Text(
-            label,
-            style: textTheme.bodyMedium?.copyWith(color: Colors.black54),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
+          // FIX: same treatment for the label so "Total Orders" /
+          // "Pending Orders" render in full instead of "Total Ord..."
+          // / "Pending ...".
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              label,
+              style: textTheme.bodyMedium?.copyWith(color: Colors.black54),
+              maxLines: 1,
+            ),
           ),
         ],
       ),

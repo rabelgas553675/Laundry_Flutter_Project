@@ -39,13 +39,6 @@ class _MyOrdersScreenState extends State<MyOrdersScreen>
 
   static const _tabs = ['All', 'Pending', 'Processing', 'Ready', 'Completed'];
 
-  /// Cached here — not built inline in [build] — for the same reason
-  /// `NotificationsScreen` caches its own stream: handing
-  /// `StreamBuilder` a brand-new `Stream` object on every rebuild
-  /// makes it tear down and resubscribe from Firestore instead of
-  /// just delivering the next event, which both wastes a listener and
-  /// can destabilize the shared Firestore client's internal state.
-  /// Only recreated if the signed-in user actually changes.
   Stream<List<OrderModel>>? _ordersStream;
   String? _streamedUserId;
 
@@ -71,10 +64,6 @@ class _MyOrdersScreenState extends State<MyOrdersScreen>
     super.dispose();
   }
 
-  /// PART 13 — "Processing" groups received/washing/drying into one
-  /// tab, matching the workflow stages between Pending and Ready.
-  /// Compares against [OrderStatus] enum values, not raw strings,
-  /// since that's what [OrderModel.status] actually is.
   List<OrderModel> _filter(List<OrderModel> orders, int tabIndex) {
     switch (tabIndex) {
       case 1:
@@ -112,8 +101,6 @@ class _MyOrdersScreenState extends State<MyOrdersScreen>
     );
 
     if (widget.embedded) {
-      // No Scaffold/AppBar here — the dashboard's own gradient bar is
-      // the only header. Just the tab strip + tab content.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -143,9 +130,6 @@ class _MyOrdersScreenState extends State<MyOrdersScreen>
   }
 }
 
-/// The tab content shared by both the standalone (`Scaffold`-wrapped)
-/// and embedded (dashboard-tab) presentations, so the two code paths
-/// above can never drift out of sync with each other.
 class _Body extends StatelessWidget {
   const _Body({
     required this.tabController,

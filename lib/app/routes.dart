@@ -14,11 +14,17 @@ import '../features/admin/screens/reports_screen.dart';
 import '../models/user_model.dart';
 import 'auth_gate.dart';
 import '../features/authentication/screens/forgot_password_screen.dart';
+import '../features/splash/screens/splash_screen.dart';
 
 class AppRoutes {
   AppRoutes._();
 
   static const String home = '/';
+  // Session/role resolution that used to live directly at [home] now
+  // lives here — [home] plays the one-time splash animation first,
+  // then hands off to this route. Reached only via
+  // pushReplacementNamed from SplashScreen, never pushed directly.
+  static const String gate = '/gate';
   static const String login = '/login';
   static const String register = '/register';
   static const String userDashboard = '/user-dashboard';
@@ -32,9 +38,13 @@ class AppRoutes {
   static const String reports = '/admin-reports';
 
   static Map<String, WidgetBuilder> get routes => {
-        // Cold-start entry point — resolves the session and hands
-        // off to Login or the right dashboard. See [AuthGate].
-        home: (context) => const AuthGate(),
+        // Cold-start entry point — plays the splash/welcome
+        // animation once, then replaces itself with [gate].
+        home: (context) => const SplashScreen(),
+        // Resolves the session and hands off to Login or the right
+        // dashboard. See [AuthGate]. This used to be what [home]
+        // pointed at directly.
+        gate: (context) => const AuthGate(),
         login: (context) => const LoginScreen(),
         register: (context) => const RegisterScreen(),
         // Any authenticated user (role: user OR admin) can reach the user

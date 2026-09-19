@@ -80,6 +80,16 @@ const double _kAppBarContentHeight = 64;
 /// in this project, so "the recipient's own client creates its own
 /// notifications" is the one architecture available, for both roles.
 ///
+/// ── APP BAR ENTRANCE ANIMATION ───────────────────────────────────
+/// [_AdminDashboardState] drives a one-shot slide-in animation
+/// ([_appBarSlideController]/[_appBarSlideAnimation]) that plays once
+/// when this screen first mounts: the glass app bar starts just above
+/// the top of the screen and eases down into its resting position,
+/// instead of simply appearing. It runs exactly once per mount (not
+/// replayed on tab switches, since the app bar never unmounts between
+/// tabs) and is purely cosmetic — it doesn't gate any data loading.
+/// Identical timing/curve to [UserDashboard]'s own app bar entrance.
+///
 /// Reachable only through the `adminDashboard` route, which
 /// [RoleGuard] (PART 05) already restricts to [UserRole.admin] — this
 /// screen does no role checking of its own.
@@ -90,7 +100,8 @@ class AdminDashboard extends StatefulWidget {
   State<AdminDashboard> createState() => _AdminDashboardState();
 }
 
-class _AdminDashboardState extends State<AdminDashboard> {
+class _AdminDashboardState extends State<AdminDashboard>
+    with SingleTickerProviderStateMixin {
   int _navIndex = 0;
 
   static const _tabTitles = <String>[
@@ -118,9 +129,27 @@ class _AdminDashboardState extends State<AdminDashboard> {
   // own Firestore-level duplicate check is still the real guard.
   final Set<String> _handledNotificationKeys = {};
 
+  // One-shot "slide down into place" animation for the glass app bar
+  // — starts just off-screen above and eases into its resting spot
+  // the moment this dashboard mounts. Same timing/curve as
+  // UserDashboard's app bar entrance.
+  late final AnimationController _appBarSlideController;
+  late final Animation<Offset> _appBarSlideAnimation;
+
   @override
   void initState() {
     super.initState();
+    _appBarSlideController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    );
+    _appBarSlideAnimation = Tween<Offset>(
+      begin: const Offset(0, -1),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(parent: _appBarSlideController, curve: Curves.easeOutCubic),
+    );
+    _appBarSlideController.forward();
     _startAdminOrderWatch();
   }
 
@@ -136,6 +165,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
   @override
   void dispose() {
     _orderWatchSubscription?.cancel();
+    _appBarSlideController.dispose();
     super.dispose();
   }
 
@@ -248,36 +278,41 @@ class _AdminDashboardState extends State<AdminDashboard> {
       extendBodyBehindAppBar: true,
       appBar: PreferredSize(
         preferredSize: Size.fromHeight(appBarTotalHeight),
-        child: adminUserId == null
-            ? _AdminAppBar(
-                title: _tabTitles[_navIndex],
-                canPop: canPop,
-                notificationCount: 0,
-                onBack: () => Navigator.maybePop(context),
-                onNotifications: () => _handleNotificationsTap(context),
-                onLogout: () => _handleLogout(context),
-              )
-            : StreamBuilder<List<NotificationModel>>(
-                // Same architecture as UserDashboard's
-                // `_UnreadNotificationsIcon`: the badge count is a
-                // live count of `!isRead` documents in the real
-                // `notifications` collection, scoped to this admin's
-                // own uid — not a locally-tracked diff.
-                stream: _notificationService.streamUserNotifications(adminUserId),
-                builder: (context, snapshot) {
-                  final unreadCount = (snapshot.data ?? const <NotificationModel>[])
-                      .where((n) => !n.isRead)
-                      .length;
-                  return _AdminAppBar(
-                    title: _tabTitles[_navIndex],
-                    canPop: canPop,
-                    notificationCount: unreadCount,
-                    onBack: () => Navigator.maybePop(context),
-                    onNotifications: () => _handleNotificationsTap(context),
-                    onLogout: () => _handleLogout(context),
-                  );
-                },
-              ),
+        // Slide the whole glass app bar down into place once, on
+        // first mount — see _appBarSlideController above.
+        child: SlideTransition(
+          position: _appBarSlideAnimation,
+          child: adminUserId == null
+              ? _AdminAppBar(
+                  title: _tabTitles[_navIndex],
+                  canPop: canPop,
+                  notificationCount: 0,
+                  onBack: () => Navigator.maybePop(context),
+                  onNotifications: () => _handleNotificationsTap(context),
+                  onLogout: () => _handleLogout(context),
+                )
+              : StreamBuilder<List<NotificationModel>>(
+                  // Same architecture as UserDashboard's
+                  // `_UnreadNotificationsIcon`: the badge count is a
+                  // live count of `!isRead` documents in the real
+                  // `notifications` collection, scoped to this admin's
+                  // own uid — not a locally-tracked diff.
+                  stream: _notificationService.streamUserNotifications(adminUserId),
+                  builder: (context, snapshot) {
+                    final unreadCount = (snapshot.data ?? const <NotificationModel>[])
+                        .where((n) => !n.isRead)
+                        .length;
+                    return _AdminAppBar(
+                      title: _tabTitles[_navIndex],
+                      canPop: canPop,
+                      notificationCount: unreadCount,
+                      onBack: () => Navigator.maybePop(context),
+                      onNotifications: () => _handleNotificationsTap(context),
+                      onLogout: () => _handleLogout(context),
+                    );
+                  },
+                ),
+        ),
       ),
       body: Stack(
         children: [
@@ -514,11 +549,18 @@ class _AdminAppBar extends StatelessWidget {
   }
 }
 
-/// App bar label shown on every admin tab: the current tab's title
-/// (fades/slides in on change), a thin divider, then the compact logo
-/// mark + "HYDRO" wordmark — identical lockup to [UserDashboard]'s
-/// `_BrandAppBarLabel`, so the two dashboards carry the same brand
-/// mark in the same spot.
+/// App bar label shown on every admin tab: the current tab's title,
+/// a thin divider, then the compact logo mark + "HYDRO" wordmark —
+/// identical lockup to [UserDashboard]'s `_BrandAppBarLabel`, so the
+/// two dashboards carry the same brand mark in the same spot.
+///
+/// TITLE ANIMATION — now uses the exact same [_SlidingTitle] widget
+/// [UserDashboard] uses: each letter of the tab title fades in and
+/// slides up individually, staggered left-to-right, instead of the
+/// previous whole-block AnimatedSwitcher fade+slide. The whole label
+/// Row is also now wrapped in a `FittedBox` (matching UserDashboard),
+/// so on narrow widths it scales down as one unit instead of
+/// overflowing.
 class _BrandAppBarLabel extends StatelessWidget {
   const _BrandAppBarLabel({
     super.key,
@@ -537,77 +579,137 @@ class _BrandAppBarLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          _SlidingTitle(
+            text: title,
+            style: const TextStyle(
+              color: Colors.black87,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.1,
+            ),
+          ),
+          const SizedBox(width: 10),
+          // Thin divider so the tab title and the brand mark read as
+          // two related but distinct pieces, not run-together text.
+          Container(
+            width: 1,
+            height: 16,
+            color: Colors.black.withValues(alpha: 0.15),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: logoHeight * _logoAspectRatio,
+            height: logoHeight,
+            child: Image.asset(
+              logoAsset,
+              alignment: Alignment.centerLeft,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Icon(
+                    Icons.local_laundry_service_outlined,
+                    size: 20,
+                    color: Colors.black45,
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'HYDRO',
+            style: TextStyle(
+              fontSize: logoHeight * 0.54,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.4,
+              height: 1.0,
+              color: const Color(0xff2E75B6),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Per-letter fade+slide-up title animation — copied verbatim from
+/// [UserDashboard]'s `_SlidingTitle` so both dashboards' tab titles
+/// animate identically. Re-plays from the start whenever [text]
+/// changes (i.e. whenever the admin switches tabs).
+class _SlidingTitle extends StatefulWidget {
+  const _SlidingTitle({required this.text, required this.style});
+
+  final String text;
+  final TextStyle style;
+
+  @override
+  State<_SlidingTitle> createState() => _SlidingTitleState();
+}
+
+class _SlidingTitleState extends State<_SlidingTitle> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 420),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.forward();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SlidingTitle oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final letters = widget.text.runes.map(String.fromCharCode).toList();
+    final total = letters.length.clamp(1, 1000);
+
     return Row(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Flexible(
-          child: AnimatedSwitcher(
-            duration: const Duration(milliseconds: 220),
-            transitionBuilder: (child, animation) => FadeTransition(
-              opacity: animation,
-              child: SlideTransition(
-                position: Tween<Offset>(
-                  begin: const Offset(0, 0.2),
-                  end: Offset.zero,
-                ).animate(animation),
+      children: List.generate(letters.length, (i) {
+        final start = (i / total) * 0.6;
+        final end = (start + 0.4).clamp(0.0, 1.0);
+        final curved = CurvedAnimation(
+          parent: _controller,
+          curve: Interval(start, end, curve: Curves.easeOutCubic),
+        );
+
+        return AnimatedBuilder(
+          animation: curved,
+          builder: (context, child) {
+            final value = curved.value;
+            return Opacity(
+              opacity: value,
+              child: Transform.translate(
+                offset: Offset(0, (1 - value) * 12),
                 child: child,
               ),
-            ),
-            child: Text(
-              title,
-              key: ValueKey(title),
-              style: const TextStyle(
-                color: Colors.black87,
-                fontSize: 18,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.1,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ),
-        const SizedBox(width: 10),
-        // Thin divider so the tab title and the brand mark read as
-        // two related but distinct pieces, not run-together text.
-        Container(
-          width: 1,
-          height: 16,
-          color: Colors.black.withValues(alpha: 0.15),
-        ),
-        const SizedBox(width: 10),
-        SizedBox(
-          width: logoHeight * _logoAspectRatio,
-          height: logoHeight,
-          child: Image.asset(
-            logoAsset,
-            alignment: Alignment.centerLeft,
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) {
-              return const Align(
-                alignment: Alignment.centerLeft,
-                child: Icon(
-                  Icons.local_laundry_service_outlined,
-                  size: 20,
-                  color: Colors.black45,
-                ),
-              );
-            },
-          ),
-        ),
-        const SizedBox(width: 6),
-        Text(
-          'HYDRO',
-          style: TextStyle(
-            fontSize: logoHeight * 0.54,
-            fontWeight: FontWeight.w800,
-            letterSpacing: 0.4,
-            height: 1.0,
-            color: const Color(0xff2E75B6),
-          ),
-        ),
-      ],
+            );
+          },
+          child: Text(letters[i], style: widget.style),
+        );
+      }),
     );
   }
 }
@@ -993,7 +1095,7 @@ class _DashboardContentState extends State<_DashboardContent> {
 
     // Stat cards and the Order Status Summary always reflect the full,
     // unfiltered data — only the Notifications list below narrows down
-    // as the admin types, same as search elsewhere in this app never       
+    // as the admin types, same as search elsewhere in this app never
     // hides aggregate totals, only the browsable list under them.
     final isSearching = _query.trim().isNotEmpty;
     final recentOrders = _filterOrders(orders, _query).take(5).toList();
@@ -1050,6 +1152,14 @@ class _DashboardContentState extends State<_DashboardContent> {
 /// its quarter of the row (only a slim gap between them) rather than
 /// being uniformly scaled down and left floating with empty space
 /// around it, so the cards read as big, edge-to-edge tiles.
+///
+/// OVERFLOW FIX — on narrow phones each slot in the row is only ~60px
+/// wide, which is less than [DashboardStatCard] needs to lay out its
+/// icon / value / label (hence the "RIGHT OVERFLOWED BY 5.1 PIXELS"
+/// markers). The design is unchanged (still one row of four), but each
+/// card is now laid out at a minimum width and, only when its slot is
+/// narrower than that, shrunk uniformly to fit the slot. On wider
+/// screens the cards render exactly as before.
 class _StatCardsRow extends StatelessWidget {
   const _StatCardsRow({
     required this.totalUsers,
@@ -1076,6 +1186,12 @@ class _StatCardsRow extends StatelessWidget {
   static const int _defaultFlex = 4;
   static const int _revenueFlex = 6;
 
+  // Minimum width each card is laid out at before being scaled down
+  // to its slot. If a card still overflows, raise its value; if the
+  // cards look too shrunken, lower it.
+  static const double _minCardWidth = 76;
+  static const double _minRevenueCardWidth = 104;
+
   /// Drops a trailing ".00" from a formatted currency string (e.g.
   /// "₱5,680.00" → "₱5,680") when the amount is a whole number, so
   /// the value is a few characters shorter and easier to fit without
@@ -1089,40 +1205,79 @@ class _StatCardsRow extends StatelessWidget {
     return formatted;
   }
 
+  /// Lays [card] out at [minWidth] and scales it down uniformly to
+  /// fill its slot when the slot is narrower than that — so the
+  /// card's internal Row/Column never gets squeezed below what it
+  /// needs. When the slot is already wide enough, [card] is returned
+  /// untouched.
+  Widget _fit(Widget card, double minWidth) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final slotWidth = constraints.maxWidth;
+        if (slotWidth >= minWidth) return card;
+
+        final slotHeight =
+            constraints.hasBoundedHeight ? constraints.maxHeight : _rowHeight;
+        final scale = slotWidth / minWidth;
+
+        return FittedBox(
+          fit: BoxFit.contain,
+          child: SizedBox(
+            width: minWidth,
+            height: slotHeight / scale,
+            child: card,
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final cards = <(Widget, int)>[
       (
-        DashboardStatCard(
-          label: 'Total Users',
-          value: '$totalUsers',
-          icon: Icons.people_outline,
+        _fit(
+          DashboardStatCard(
+            label: 'Total Users',
+            value: '$totalUsers',
+            icon: Icons.people_outline,
+          ),
+          _minCardWidth,
         ),
         _defaultFlex,
       ),
       (
-        DashboardStatCard(
-          label: 'Total Orders',
-          value: '$totalOrders',
-          icon: Icons.receipt_long_outlined,
+        _fit(
+          DashboardStatCard(
+            label: 'Total Orders',
+            value: '$totalOrders',
+            icon: Icons.receipt_long_outlined,
+          ),
+          _minCardWidth,
         ),
         _defaultFlex,
       ),
       (
-        DashboardStatCard(
-          label: 'Pending Orders',
-          value: '$pendingOrders',
-          icon: Icons.pending_actions_outlined,
-          iconColor: Colors.orange,
+        _fit(
+          DashboardStatCard(
+            label: 'Pending Orders',
+            value: '$pendingOrders',
+            icon: Icons.pending_actions_outlined,
+            iconColor: Colors.orange,
+          ),
+          _minCardWidth,
         ),
         _defaultFlex,
       ),
       (
-        DashboardStatCard(
-          label: 'Total Revenue',
-          value: _compactCurrency(totalRevenue),
-          icon: Icons.payments_outlined,
-          iconColor: Colors.green,
+        _fit(
+          DashboardStatCard(
+            label: 'Total Revenue',
+            value: _compactCurrency(totalRevenue),
+            icon: Icons.payments_outlined,
+            iconColor: Colors.green,
+          ),
+          _minRevenueCardWidth,
         ),
         _revenueFlex,
       ),
@@ -1426,11 +1581,7 @@ String _formatShortDate(DateTime? date) {
 ///   ready) happens in the background in [_AdminDashboardState]
 ///   (`_startAdminOrderWatch`) — the same "watcher lives above this
 ///   screen so it survives the screen being popped" split the
-///   customer app uses (there it's [NotificationsScreen] itself that
-///   owns the watcher, because nothing above it needs to keep
-///   running independently; here [AdminDashboard] already needs to
-///   keep the watcher alive for the bell badge, so this screen simply
-///   doesn't duplicate it).
+///   customer app uses.
 /// * **Read state** — persisted in Firestore via
 ///   [NotificationService.markAsRead], never a local in-memory set.
 ///   Tapping a notification here behaves exactly like tapping one on

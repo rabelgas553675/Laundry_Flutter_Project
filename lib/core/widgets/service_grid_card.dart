@@ -1,17 +1,21 @@
 // TARGET PATH IN YOUR PROJECT: lib/core/widgets/service_grid_card.dart
 //
 // Shared "photo card" for a single laundry service — big service photo +
-// ETA badge on top, price/name/arrow row below. Extracted out of
-// ExploreServicesScreen so ServiceBundleScreen (and any future screen)
-// reuses the exact same card instead of duplicating it, so every service
-// tile in the app keeps looking identical.
+// ETA badge on top, price/name/arrow row below. Used by
+// ExploreServicesScreen and ServiceBundleScreen so every service tile in
+// the app looks identical.
 //
-// NOTE: ServiceModel now exposes a real `unit` field (see Part 1 of
-// the per-piece pricing feature, `core/utils/service_unit.dart`), so
-// the kg-vs-piece question below is always answered from
-// `service.unit` — never re-derived from the service name here. The
-// "asset path"/icon helpers still infer their asset from the name,
-// since that's a presentation concern unrelated to pricing unit.
+// FIXES IN THIS VERSION
+//  1. "BOTTOM OVERFLOWED BY 4.1 PIXELS": the price ("$70.00 Per Kg") used
+//     to wrap onto two lines in narrow grid cells, making the card taller
+//     than the grid cell. It is now forced onto ONE line and scales down
+//     slightly if the cell is too narrow (FittedBox + scaleDown).
+//  2. ETA badge is now a solid white pill with coloured text, so it stays
+//     readable on top of any photo.
+//
+// NOTE: ServiceModel exposes a real `unit` field
+// (`core/utils/service_unit.dart`), so the kg-vs-piece question is always
+// answered from `service.unit` — never re-derived from the service name.
 
 import 'package:flutter/material.dart';
 
@@ -21,9 +25,6 @@ import 'app_card.dart';
 
 /// Whether a service's price is picked manually at checkout (the
 /// "Service Bundle" tile) rather than shown directly on the card.
-/// Unrelated to [ServiceUnit] — a bundle isn't priced per kg or per
-/// piece itself; the customer builds their own combination
-/// downstream on [ServiceBundleScreen].
 bool isBundleService(ServiceModel service) {
   final name = service.name.toLowerCase();
   return name.contains('bundle') || name.contains('pick');
@@ -43,14 +44,8 @@ Color etaBadgeColorForService(ServiceModel service, {required bool isBundle}) {
 
 /// Maps a service to its bundled asset image (see pubspec.yaml assets).
 ///
-/// REAL PHOTOS: this only returns a path string; it does not generate or
-/// fake any image. Point each branch at your own photo asset (or replace
-/// `Image.asset` in [ServiceGridCard] with `Image.network`/`Image.file`
-/// if photos come from a URL or the device instead of bundled assets).
-/// Just swap the file at each path — no other code needs to change.
-///
-/// Dry Cleaning, Wash & Ironing, and Service Bundle use .jpg (matching
-/// the photos actually supplied) — the other services still use .png.
+/// Dry Cleaning, Wash & Ironing, and Service Bundle use .jpg — the other
+/// services use .png.
 String assetPathForService(ServiceModel service) {
   final name = service.name.toLowerCase();
   if (name.contains('quick')) return 'assets/images/quick_wash.png';
@@ -65,7 +60,7 @@ String assetPathForService(ServiceModel service) {
 }
 
 /// Fallback icon shown (via errorBuilder) only if the asset above fails
-/// to load — never shown once a real photo is wired up.
+/// to load.
 IconData iconForService(ServiceModel service) {
   final name = service.name.toLowerCase();
   if (name.contains('quick')) return Icons.flash_on_outlined;
@@ -78,8 +73,7 @@ IconData iconForService(ServiceModel service) {
   return Icons.local_laundry_service_outlined;
 }
 
-/// Photo + ETA badge + price/name/arrow card for a single service. Used
-/// by both the main Explore Services grid and the Service Bundle screen.
+/// Photo + ETA badge + price/name/arrow card for a single service.
 class ServiceGridCard extends StatelessWidget {
   const ServiceGridCard({
     super.key,
@@ -104,11 +98,6 @@ class ServiceGridCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           // ---- Service photo -------------------------------------------------
-          // Drop your real photo into the asset path returned by
-          // `assetPathForService` above (or switch Image.asset below to
-          // Image.network/Image.file). errorBuilder is only a placeholder
-          // fallback icon for a missing asset — never shown once a real
-          // photo is wired up.
           AspectRatio(
             aspectRatio: 1.2,
             child: Stack(
@@ -140,7 +129,9 @@ class ServiceGridCard extends StatelessWidget {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
-                      color: badgeColor.withValues(alpha: 0.16),
+                      // Solid-ish white so the coloured text is readable
+                      // on top of any photo.
+                      color: Colors.white.withValues(alpha: 0.92),
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Text(
@@ -170,43 +161,59 @@ class ServiceGridCard extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (isBundle)
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: const [
-                          Text(
-                            'Pick Manually',
-                            style: TextStyle(
-                              color: Color(0xff9e1e77),
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          Icon(
-                            Icons.keyboard_arrow_down_rounded,
-                            size: 18,
-                            color: Color(0xff9e1e77),
-                          ),
-                        ],
-                      )
-                    else
-                      RichText(
-                        text: TextSpan(
-                          style: textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                            color: const Color(0xff9e1e77),
-                          ),
+                      const FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            TextSpan(
-                              text:
-                                  '\$${service.pricePerKg.toStringAsFixed(2)}',
-                            ),
-                            TextSpan(
-                              text: ' ${ServiceUnitFormat.perUnitPhrase(service.unit)}',
-                              style: textTheme.bodySmall?.copyWith(
-                                fontWeight: FontWeight.normal,
-                                color: Colors.black54,
+                            Text(
+                              'Pick Manually',
+                              maxLines: 1,
+                              softWrap: false,
+                              style: TextStyle(
+                                color: Color(0xff9e1e77),
+                                fontWeight: FontWeight.bold,
                               ),
                             ),
+                            Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              size: 18,
+                              color: Color(0xff9e1e77),
+                            ),
                           ],
+                        ),
+                      )
+                    else
+                      // Forced onto ONE line; scales down if the cell is
+                      // too narrow. This is what removes the 4.1px
+                      // bottom overflow.
+                      FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: RichText(
+                          maxLines: 1,
+                          softWrap: false,
+                          text: TextSpan(
+                            style: textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.bold,
+                              color: const Color(0xff9e1e77),
+                            ),
+                            children: [
+                              TextSpan(
+                                text:
+                                    '\$${service.pricePerKg.toStringAsFixed(2)}',
+                              ),
+                              TextSpan(
+                                text:
+                                    ' ${ServiceUnitFormat.perUnitPhrase(service.unit)}',
+                                style: textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.normal,
+                                  color: Colors.black54,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     const SizedBox(height: 4),

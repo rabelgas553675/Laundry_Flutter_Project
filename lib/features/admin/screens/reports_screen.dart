@@ -102,6 +102,7 @@ class _ReportsContent extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final horizontalPadding = width > 900 ? 32.0 : 16.0;
+    final crossAxisCount = width > 600 ? 4 : 2;
 
     return ListView(
       padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 16),
@@ -115,14 +116,31 @@ class _ReportsContent extends StatelessWidget {
               .bodySmall
               ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
-        const SizedBox(height: 12),
-        GridView.count(
+        const SizedBox(height: 2),
+        GridView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: width > 600 ? 4 : 2,
-          mainAxisSpacing: 12,
-          crossAxisSpacing: 12,
-          childAspectRatio: 1.3,
+          // FIX: aspect-ratio sizing (childAspectRatio) derives cell
+          // height from the grid's *width*. At this screen's actual
+          // width that math produced cells shorter than the stat
+          // card's real content (icon + value + label), so the label
+          // text got clipped/overlapped instead of laid out cleanly —
+          // the red-striped overflow markers in the screenshot. A
+          // fixed `mainAxisExtent` instead gives every cell a
+          // constant, content-driven height regardless of screen
+          // width, so nothing gets clipped at any breakpoint.
+          //
+          // 132 still overflowed by 6px — the debug RenderFlex trace
+          // showed DashboardStatCard's inner Column getting
+          // `h=100.0` (132 minus its own top+bottom padding) while
+          // actually needing 106. 144 covers that plus a small
+          // buffer against minor text-scale/locale differences.
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxisCount,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            mainAxisExtent: 144,
+          ),
           children: [
             DashboardStatCard(
               label: 'Total Revenue',

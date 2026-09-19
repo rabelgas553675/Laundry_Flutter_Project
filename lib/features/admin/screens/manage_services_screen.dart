@@ -308,9 +308,10 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
   }
 }
 
-/// Frosted "Add Service" FAB — a rounded glass pill instead of the
-/// default solid [FloatingActionButton.extended], matching the rest
-/// of this section's blurred-glass buttons.
+/// Frosted "Add Service" FAB — a light glass pill (matches the
+/// "Add Promo" button style used elsewhere in the Admin section):
+/// translucent white background with primary-colored icon/text,
+/// rather than a solid dark pill with white text.
 class _GlassFab extends StatelessWidget {
   const _GlassFab({required this.onPressed});
 
@@ -325,31 +326,31 @@ class _GlassFab extends StatelessWidget {
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Material(
-          color: colorScheme.primary.withValues(alpha: 0.85),
+          color: Colors.white.withValues(alpha: 0.55),
           child: InkWell(
             onTap: onPressed,
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.4)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.6)),
                 boxShadow: [
                   BoxShadow(
-                    color: colorScheme.primary.withValues(alpha: 0.35),
+                    color: colorScheme.primary.withValues(alpha: 0.15),
                     blurRadius: 18,
                     offset: const Offset(0, 8),
                   ),
                 ],
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.add, color: Colors.white, size: 20),
-                  SizedBox(width: 8),
+                  Icon(Icons.add, color: colorScheme.primary, size: 20),
+                  const SizedBox(width: 8),
                   Text(
                     'Add Service',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: colorScheme.primary,
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
                     ),
