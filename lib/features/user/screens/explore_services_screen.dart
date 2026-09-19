@@ -2,6 +2,7 @@
 // lib/features/user/screens/explore_services_screen.dart
 // (replaces the existing file at that path)
 
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -116,10 +117,41 @@ class _ExploreServicesScreenState extends State<ExploreServicesScreen> {
   Object? _error;
   List<ServiceModel> _services = const <ServiceModel>[];
 
+  /// Live listener on the active services, so a photo the admin
+  /// uploads or replaces (Manage Services → Service Photo) shows up on
+  /// its card here right away — no reopening the screen, no pull to
+  /// refresh, no app restart. The one-shot [_loadServices] below stays
+  /// as the source of the loading/error/empty states and of
+  /// pull-to-refresh; this only keeps [_services] current afterwards.
+  StreamSubscription<List<ServiceModel>>? _servicesSubscription;
+
   @override
   void initState() {
     super.initState();
     _loadServices();
+    _listenForServiceChanges();
+  }
+
+  @override
+  void dispose() {
+    _servicesSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _listenForServiceChanges() {
+    _servicesSubscription = _repository.watchActiveServices().listen(
+      (services) {
+        if (!mounted) return;
+        setState(() {
+          _services = services;
+          _error = null; // a good live update supersedes an earlier load error
+        });
+      },
+      // A failed listener is not worth an error state of its own —
+      // _loadServices already reports load problems, and
+      // pull-to-refresh remains available.
+      onError: (Object _) {},
+    );
   }
 
   Future<void> _loadServices({bool forceRefresh = false}) async {
@@ -288,6 +320,10 @@ class _ExploreServicesScreenState extends State<ExploreServicesScreen> {
                             if (matched != null) {
                               return ServiceGridCard(
                                 service: matched,
+                                // Show the photo the admin uploaded for
+                                // this service, falling back to the
+                                // bundled category image, then the icon.
+                                useUploadedImage: true,
                                 onTap: () => _handleTileTap(tile, matched),
                               );
                             }

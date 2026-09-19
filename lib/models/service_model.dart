@@ -287,6 +287,12 @@ class ServiceModel {
     ServiceType? serviceType,
     PricingType? pricingType,
     String? imageUrl,
+
+    /// `imageUrl ?? this.imageUrl` can never express "clear the
+    /// photo" (passing null just means "keep the current one"), so
+    /// removing a service's photo needs its own explicit flag. Wins
+    /// over [imageUrl] if both are given.
+    bool clearImageUrl = false,
     DateTime? updatedAt,
   }) {
     return ServiceModel(
@@ -301,7 +307,7 @@ class ServiceModel {
       unit: unit ?? this.unit,
       serviceType: serviceType ?? this.serviceType,
       pricingType: pricingType ?? this.pricingType,
-      imageUrl: imageUrl ?? this.imageUrl,
+      imageUrl: clearImageUrl ? null : (imageUrl ?? this.imageUrl),
     );
   }
 

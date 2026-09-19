@@ -109,6 +109,14 @@ class ServiceRepository {
     return services;
   }
 
+  /// Live stream of the active services — see
+  /// [ServiceDatasource.watchActiveServices]. Deliberately bypasses
+  /// [_cachedActive]: a listener is only useful if it reflects changes
+  /// as they happen.
+  Stream<List<ServiceModel>> watchActiveServices() {
+    return _datasource.watchActiveServices();
+  }
+
   /// Part 17 — Admin service management needs inactive services too.
   Future<List<ServiceModel>> getAllServices() {
     return _datasource.getAllServices();
@@ -167,6 +175,9 @@ class ServiceRepository {
     }
   }
 
+  /// A fresh, unused service id — see [ServiceDatasource.newServiceId].
+  String newServiceId() => _datasource.newServiceId();
+
   /// Part 17 — Add service.
   Future<void> createService(ServiceModel service) async {
     await _datasource.createService(service);
@@ -177,6 +188,20 @@ class ServiceRepository {
   /// activate/deactivate.
   Future<void> updateService(ServiceModel updated) async {
     await _datasource.updateServiceFields(updated.id, updated.toEditableMap());
+    _cachedActive = null;
+  }
+
+  /// Delete Service — permanently removes the Firestore document.
+  /// This does NOT touch Supabase Storage: the caller
+  /// ([ManageServicesScreen]) still holds the [ServiceModel] being
+  /// deleted (and therefore its `imageUrl`) and is responsible for
+  /// calling `FileService.removeServiceImage` itself, the same way
+  /// [ServiceFormDialog] already owns calling
+  /// `FileService.removeServiceImage` when a photo is removed via
+  /// Edit — this repository only owns the database record, never
+  /// Storage.
+  Future<void> deleteService(String id) async {
+    await _datasource.deleteService(id);
     _cachedActive = null;
   }
 

@@ -12,6 +12,21 @@
 //     slightly if the cell is too narrow (FittedBox + scaleDown).
 //  2. ETA badge is now a solid white pill with coloured text, so it stays
 //     readable on top of any photo.
+//  3. BUG FIX: `useUploadedImage` now defaults to `true` instead of
+//     `false`. Previously every call site that didn't explicitly pass
+//     `useUploadedImage: true` silently ignored the admin's uploaded
+//     photo (ServiceModel.imageUrl) and fell back to the bundled
+//     category asset picked by matching keywords in the service name
+//     (assetPathForService) — meaning services with a custom name (e.g.
+//     "SSFDGF") always showed the generic standard_wash.png regardless
+//     of what photo the admin uploaded for them, and even services
+//     whose name happened to match a keyword (e.g. "Dry Cleaning")
+//     showed the bundled stock photo instead of the admin's own upload.
+//     Defaulting to `true` makes "show the admin's real photo when one
+//     exists" the behavior everywhere, with the bundled asset only used
+//     as a fallback when `imageUrl` is null/empty (see
+//     uploadedImageUrlForService) or fails to load (see errorBuilder
+//     in _ServicePhoto).
 //
 // NOTE: ServiceModel exposes a real `unit` field
 // (`core/utils/service_unit.dart`), so the kg-vs-piece question is always
@@ -73,21 +88,44 @@ IconData iconForService(ServiceModel service) {
   return Icons.local_laundry_service_outlined;
 }
 
+/// The admin-uploaded photo URL for [service] (Manage Services → Add /
+/// Edit Service → Service Photo), trimmed — or null when the admin
+/// hasn't uploaded one.
+String? uploadedImageUrlForService(ServiceModel service) {
+  final url = service.imageUrl?.trim();
+  return (url == null || url.isEmpty) ? null : url;
+}
+
 /// Photo + ETA badge + price/name/arrow card for a single service.
 class ServiceGridCard extends StatelessWidget {
   const ServiceGridCard({
     super.key,
     required this.service,
     required this.onTap,
+    this.useUploadedImage = true,
   });
 
   final ServiceModel service;
   final VoidCallback onTap;
 
+  /// When true, the photo the admin uploaded for this service
+  /// ([ServiceModel.imageUrl]) is shown instead of the bundled
+  /// category image. Image priority is then:
+  ///   1. admin-uploaded photo
+  ///   2. bundled default/category image ([assetPathForService])
+  ///   3. fallback icon ([iconForService])
+  /// (2 and 3 are also what's shown if the uploaded photo fails to
+  /// load, so a broken URL never leaves a blank card.)
+  ///
+  /// Defaults to `true` so every call site shows the admin's real
+  /// photo whenever one exists; pass `false` only for a call site
+  /// that must always show the bundled category image regardless of
+  /// what the admin uploaded.
+  final bool useUploadedImage;
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final colors = Theme.of(context).colorScheme;
     final isBundle = isBundleService(service);
     final badgeColor = etaBadgeColorForService(service, isBundle: isBundle);
 
@@ -105,21 +143,9 @@ class ServiceGridCard extends StatelessWidget {
               children: [
                 ClipRRect(
                   borderRadius: BorderRadius.circular(14),
-                  child: Image.asset(
-                    assetPathForService(service),
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return Container(
-                        color: colors.primary.withValues(alpha: 0.08),
-                        child: Center(
-                          child: Icon(
-                            iconForService(service),
-                            size: 32,
-                            color: colors.primary,
-                          ),
-                        ),
-                      );
-                    },
+                  child: _ServicePhoto(
+                    service: service,
+                    useUploadedImage: useUploadedImage,
                   ),
                 ),
                 Positioned(
@@ -233,6 +259,74 @@ class ServiceGridCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The card's photo, following the image priority documented on
+/// [ServiceGridCard.useUploadedImage]. The default (bundled image →
+/// icon) branch is the card's original, unchanged image code.
+class _ServicePhoto extends StatelessWidget {
+  const _ServicePhoto({
+    required this.service,
+    required this.useUploadedImage,
+  });
+
+  final ServiceModel service;
+  final bool useUploadedImage;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    // Priority 2 → 3: bundled category image, then the icon.
+    Widget defaultPhoto() {
+      return Image.asset(
+        assetPathForService(service),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            color: colors.primary.withValues(alpha: 0.08),
+            child: Center(
+              child: Icon(
+                iconForService(service),
+                size: 32,
+                color: colors.primary,
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    final uploadedUrl =
+        useUploadedImage ? uploadedImageUrlForService(service) : null;
+    if (uploadedUrl == null) return defaultPhoto();
+
+    // Priority 1: the admin's real photo. The saved URL carries a
+    // cache-busting `?updated=` stamp (see FileService), so a replaced
+    // photo is a new URL and loads immediately instead of a cached
+    // copy of the old one.
+    return Image.network(
+      uploadedUrl,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => defaultPhoto(),
+      loadingBuilder: (context, child, progress) {
+        if (progress == null) return child;
+        // Neutral tint (the same one the icon fallback uses) rather
+        // than the bundled image, so the wrong photo never flashes
+        // before the real one arrives.
+        return Container(
+          color: colors.primary.withValues(alpha: 0.08),
+          child: const Center(
+            child: SizedBox(
+              height: 22,
+              width: 22,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ),
+        );
+      },
     );
   }
 }

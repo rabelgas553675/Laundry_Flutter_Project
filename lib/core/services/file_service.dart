@@ -30,6 +30,13 @@ class FileService {
   /// before this is used.
   static const _promoBucket = 'promo-images';
 
+  /// Separate bucket for admin-uploaded service photos (Manage Services
+  /// → Add/Edit Service), kept apart from [_promoBucket] for the same
+  /// reason promo photos are kept apart from profile photos. Must exist
+  /// in the Supabase project (public bucket, same setup and policies as
+  /// "promo-images") before this is used.
+  static const _serviceBucket = 'service-images';
+
   sb.SupabaseClient get _client => sb.Supabase.instance.client;
 
   Future<XFile?> pickFromCamera() {
@@ -39,6 +46,13 @@ class FileService {
   Future<XFile?> pickFromGallery() {
     return _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
   }
+
+  /// Public entry point to the same checks [uploadServiceImage] /
+  /// [uploadPromoImage] run at upload time (JPG/PNG only, not empty,
+  /// under 5 MB) so a form can reject a bad file the moment it's
+  /// picked, instead of only after the admin taps Save. Throws
+  /// [AppException] with a user-facing message.
+  Future<void> validateImage(XFile file) => _validate(file);
 
   /// Throws [AppException] (never a raw platform exception) so callers
   /// can show `e.message` straight in a SnackBar.
@@ -157,6 +171,55 @@ class FileService {
   Future<void> removePromoImage(String promoId) async {
     try {
       await _client.storage.from(_promoBucket).remove([_promoPath(promoId)]);
+    } on sb.StorageException catch (e) {
+      if (e.message.toLowerCase().contains('not found')) return;
+      throw AppException(e.message.isNotEmpty ? e.message : 'Could not remove the photo. Please try again.');
+    }
+  }
+
+  /// Fixed filename per service, same reasoning as [_promoPath]:
+  /// replacing a service's photo overwrites the same Storage object
+  /// instead of leaving orphaned files behind.
+  String _servicePath(String serviceId) => 'services/$serviceId/photo.jpg';
+
+  /// Validates, uploads to `service-images/services/{serviceId}/photo.jpg`,
+  /// and returns the public URL to save as [ServiceModel.imageUrl].
+  ///
+  /// [serviceId] is known before the Firestore document exists (see
+  /// `ServiceRepository.newServiceId`), so a brand-new service's photo
+  /// can be uploaded first and its URL written together with the rest
+  /// of the fields in the service's very first write.
+  Future<String> uploadServiceImage({
+    required String serviceId,
+    required XFile file,
+  }) async {
+    await _validate(file);
+
+    try {
+      final path = _servicePath(serviceId);
+      final bytes = await file.readAsBytes();
+      await _client.storage.from(_serviceBucket).uploadBinary(
+            path,
+            bytes,
+            fileOptions: const sb.FileOptions(
+              contentType: 'image/jpeg',
+              upsert: true, // overwrite the previous photo at this path
+            ),
+          );
+      // Cache-bust so a replaced photo shows immediately instead of a
+      // cached copy of the old one at the same URL.
+      final publicUrl = _client.storage.from(_serviceBucket).getPublicUrl(path);
+      return '$publicUrl?updated=${DateTime.now().millisecondsSinceEpoch}';
+    } on sb.StorageException catch (e) {
+      throw AppException(e.message.isNotEmpty ? e.message : 'Upload failed. Please try again.');
+    }
+  }
+
+  /// Deletes a service's stored photo. A missing object is treated as
+  /// success, same as [removePromoImage].
+  Future<void> removeServiceImage(String serviceId) async {
+    try {
+      await _client.storage.from(_serviceBucket).remove([_servicePath(serviceId)]);
     } on sb.StorageException catch (e) {
       if (e.message.toLowerCase().contains('not found')) return;
       throw AppException(e.message.isNotEmpty ? e.message : 'Could not remove the photo. Please try again.');

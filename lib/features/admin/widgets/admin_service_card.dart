@@ -20,23 +20,37 @@ class AdminServiceCard extends StatelessWidget {
     required this.service,
     required this.onEdit,
     required this.onToggleStatus,
+    required this.onDelete,
     this.isUpdating = false,
+    this.isDeleting = false,
   });
 
   final ServiceModel service;
   final VoidCallback onEdit;
   final VoidCallback onToggleStatus;
 
+  /// Delete Service action — shows a trash icon next to Edit.
+  /// [ManageServicesScreen] owns the confirmation dialog and the
+  /// actual delete; this card only surfaces the tap.
+  final VoidCallback onDelete;
+
   /// True while this specific service's activate/deactivate toggle is
   /// mid-flight, so only its own switch shows a spinner rather than
   /// the whole list looking busy.
   final bool isUpdating;
+
+  /// True while this specific service is being deleted. Disables
+  /// Edit/Delete/toggle on this card (same reasoning as [isUpdating])
+  /// so the admin can't start a second action on a service that's
+  /// already being removed.
+  final bool isDeleting;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final colors = Theme.of(context).colorScheme;
     final isActive = service.status == ServiceStatus.active;
+    final isBusy = isUpdating || isDeleting;
 
     return AppCard(
       child: Row(
@@ -77,10 +91,30 @@ class AdminServiceCard extends StatelessWidget {
           const SizedBox(width: 8),
           Column(
             children: [
-              IconButton(
-                tooltip: 'Edit service',
-                icon: const Icon(Icons.edit_outlined),
-                onPressed: isUpdating ? null : onEdit,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Edit service',
+                    icon: const Icon(Icons.edit_outlined),
+                    onPressed: isBusy ? null : onEdit,
+                  ),
+                  if (isDeleting)
+                    const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  else
+                    IconButton(
+                      tooltip: 'Delete service',
+                      icon: Icon(Icons.delete_outline, color: colors.error),
+                      onPressed: isBusy ? null : onDelete,
+                    ),
+                ],
               ),
               if (isUpdating)
                 const Padding(
@@ -94,7 +128,7 @@ class AdminServiceCard extends StatelessWidget {
               else
                 Switch(
                   value: isActive,
-                  onChanged: (_) => onToggleStatus(),
+                  onChanged: isBusy ? null : (_) => onToggleStatus(),
                 ),
             ],
           ),

@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import '../../../core/services/file_service.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../../../core/widgets/error_state.dart';
 import '../../../core/widgets/glass_container.dart';
@@ -49,11 +50,21 @@ const double _kAppBarContentHeight = 64;
 /// supplies both — only the state panels below pick up the glass
 /// treatment, since they read fine on either backdrop.
 class ManageServicesScreen extends StatefulWidget {
-  const ManageServicesScreen({super.key, this.repository, this.embedded = false});
+  const ManageServicesScreen({
+    super.key,
+    this.repository,
+    this.fileService,
+    this.embedded = false,
+  });
 
   /// Injectable for widget tests; defaults to a real
   /// Firestore-backed [ServiceRepository].
   final ServiceRepository? repository;
+
+  /// Injectable for widget tests; defaults to a real Supabase-backed
+  /// [FileService]. Used by Delete Service to also remove the
+  /// service's photo from Supabase Storage — see [_deleteService].
+  final FileService? fileService;
 
   /// When `true`, shown as one tab of [AdminDashboard]'s bottom-nav
   /// `IndexedStack` — no own `Scaffold`/`AppBar`/background is drawn
@@ -66,6 +77,7 @@ class ManageServicesScreen extends StatefulWidget {
 
 class _ManageServicesScreenState extends State<ManageServicesScreen> {
   late final ServiceRepository _repository = widget.repository ?? ServiceRepository();
+  late final FileService _fileService = widget.fileService ?? FileService();
 
   /// Seeds each itemized service's per-garment catalog (currently
   /// only Dry Cleaning / Wash & Ironing have one — see
@@ -82,6 +94,11 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
   /// Id of the service whose activate/deactivate switch is mid-flight,
   /// so only that one card shows a spinner rather than the whole list.
   String? _togglingServiceId;
+
+  /// Id of the service currently being deleted (confirmed, in
+  /// flight), so only that one card shows the delete spinner and
+  /// disables its own actions — same reasoning as [_togglingServiceId].
+  String? _deletingServiceId;
 
   /// BUG FIX — this screen used to call [ServiceRepository.getAllServices]
   /// directly and nothing else, despite that method's own doc comment
@@ -136,9 +153,11 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
   }
 
   Future<void> _refresh() async {
-    setState(() => _servicesFuture = _load());
-    await _servicesFuture;
-  }
+  setState(() {
+    _servicesFuture = _load();
+  });
+  await _servicesFuture;
+}
 
   Future<void> _openAddDialog() async {
     final saved = await showDialog<bool>(
@@ -198,6 +217,78 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
     }
   }
 
+  /// Delete Service — a permanent, hard delete, distinct from
+  /// [_toggleStatus]'s deactivate. Confirms first since this can't be
+  /// undone (a deactivated service can be reactivated; a deleted one
+  /// can't be recovered). Mirrors `ManagePromosScreen._deletePromo`.
+  ///
+  /// Order of operations matters: the Firestore document is deleted
+  /// first, then (best-effort) the service's Supabase Storage photo.
+  /// That way a failure deleting the *image* never leaves a service
+  /// record pointing at a Storage object that's about to disappear
+  /// anyway, and — same as `ServiceFormDialog`'s own "remove photo"
+  /// path — a Storage cleanup failure here doesn't block or roll back
+  /// the (already-successful) deletion of the service itself.
+  Future<void> _deleteService(ServiceModel service) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Service?'),
+        content: Text(
+          'This will permanently delete "${service.name}". This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    if (!mounted) return;
+
+    setState(() => _deletingServiceId = service.id);
+    try {
+      await _repository.deleteService(service.id);
+
+      // Non-fatal: the service record is already gone either way, so
+      // an orphaned Storage object here is a cleanup nicety, not a
+      // reason to show the admin an error for a delete that actually
+      // succeeded.
+      final imageUrl = service.imageUrl?.trim();
+      if (imageUrl != null && imageUrl.isNotEmpty) {
+        try {
+          await _fileService.removeServiceImage(service.id);
+        } catch (_) {}
+      }
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('${service.name} has been deleted.')));
+      await _refresh();
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Unable to delete this service.')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Something went wrong. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _deletingServiceId = null);
+    }
+  }
+
   Widget _buildBody(BuildContext context, {required EdgeInsets listPadding}) {
     return FutureBuilder<List<ServiceModel>>(
       future: _servicesFuture,
@@ -240,8 +331,10 @@ class _ManageServicesScreenState extends State<ManageServicesScreen> {
               return AdminServiceCard(
                 service: service,
                 isUpdating: _togglingServiceId == service.id,
+                isDeleting: _deletingServiceId == service.id,
                 onEdit: () => _openEditDialog(service),
                 onToggleStatus: () => _toggleStatus(service),
+                onDelete: () => _deleteService(service),
               );
             },
           ),

@@ -8,7 +8,8 @@ import '../../../data/repositories/service_repository.dart';
 import '../../../models/service_model.dart';
 
 // NOTE: ServiceModel (see models/service_model.dart) has:
-//   id, name, description, pricePerKg, estimatedTime, status, createdAt
+//   id, name, description, pricePerKg, estimatedTime, status, createdAt,
+//   imageUrl
 // It does NOT have assetPath / priceFormatted / etaText / etaColorCode —
 // those were from an earlier draft of the model. The helpers below
 // derive the same display values from the real fields instead.
@@ -55,6 +56,67 @@ IconData _iconForService(ServiceModel service) {
   if (name.contains('quick')) return Icons.flash_on_outlined;
   if (name.contains('premium')) return Icons.auto_awesome_outlined;
   return Icons.local_laundry_service_outlined;
+}
+
+/// BUG FIX: this card previously always rendered
+/// `Image.asset(_assetPathForService(service))` directly — it never
+/// looked at `service.imageUrl` at all, so an admin-uploaded photo
+/// (Manage Services → Add/Edit Service → Service Photo) was never
+/// shown here, even though it was correctly uploaded to Supabase
+/// Storage and saved on the service document. Every card silently
+/// fell back to one of three generic bundled stock photos based on
+/// keyword-matching the service name.
+///
+/// Image priority is now:
+///   1. admin-uploaded photo (`service.imageUrl`)
+///   2. bundled default/category image (`_assetPathForService`)
+///   3. fallback icon (`_iconForService`)
+/// (2 and 3 are also what's shown if the uploaded photo fails to
+/// load, so a broken URL never leaves a blank card.)
+Widget _buildServicePhoto(ServiceModel service, ColorScheme colors) {
+  final uploadedUrl = service.imageUrl?.trim();
+
+  Widget assetFallback() {
+    return Image.asset(
+      _assetPathForService(service),
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) {
+        return Container(
+          color: colors.primary.withValues(alpha: 0.08),
+          child: Center(
+            child: Icon(
+              _iconForService(service),
+              size: 40,
+              color: colors.primary,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  if (uploadedUrl == null || uploadedUrl.isEmpty) {
+    return assetFallback();
+  }
+
+  return Image.network(
+    uploadedUrl,
+    fit: BoxFit.cover,
+    errorBuilder: (context, error, stackTrace) => assetFallback(),
+    loadingBuilder: (context, child, progress) {
+      if (progress == null) return child;
+      return Container(
+        color: colors.primary.withValues(alpha: 0.08),
+        child: const Center(
+          child: SizedBox(
+            height: 20,
+            width: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 /// The bold, colored leading part of the price string, e.g. "$0.80".
@@ -518,22 +580,7 @@ class _ServiceListItem extends StatelessWidget {
                         Positioned.fill(
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(14),
-                            child: Image.asset(
-                              _assetPathForService(service),
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return Container(
-                                  color: colors.primary.withValues(alpha: 0.08),
-                                  child: Center(
-                                    child: Icon(
-                                      _iconForService(service),
-                                      size: 40,
-                                      color: colors.primary,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
+                            child: _buildServicePhoto(service, colors),
                           ),
                         ),
                         // ETA Tag — also glassy: tinted + soft border, no

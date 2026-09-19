@@ -1,13 +1,18 @@
+import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
+import '../../../core/errors/app_exception.dart';
+import '../../../core/services/file_service.dart';
 import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../data/repositories/service_repository.dart';
 import '../../../models/service_model.dart';
+import 'service_photo_field.dart';
 
 /// PART 17 — the "Add service" / "Edit service" form.
 ///
@@ -15,6 +20,16 @@ import '../../../models/service_model.dart';
 /// (a brand-new [ServiceModel] with a blank Firestore-assigned id is
 /// created); non-null means "Edit service" (name, description, price,
 /// estimated time, and active/inactive are all editable).
+///
+/// ── SERVICE PHOTO ───────────────────────────────────────────────
+/// An optional photo, uploaded by the admin from their device via
+/// [ServicePhotoField] (between Service Name and Description). The
+/// image bytes go to Supabase Storage through [FileService]; only the
+/// resulting public URL is saved on the service document as
+/// [ServiceModel.imageUrl]. Editing shows the currently saved photo,
+/// which can be replaced or removed. Nothing is uploaded, replaced,
+/// or deleted until the admin taps Save — Cancel discards any picked
+/// photo.
 ///
 /// ── GLASS REDESIGN ──────────────────────────────────────────────
 /// A frosted glass card (`BackdropFilter` blur + translucent white
@@ -47,7 +62,12 @@ import '../../../models/service_model.dart';
 ///      a lighter `barrierColor` — see the snippet at the bottom of
 ///      this file's accompanying message.
 class ServiceFormDialog extends StatefulWidget {
-  const ServiceFormDialog({super.key, this.existing, this.repository});
+  const ServiceFormDialog({
+    super.key,
+    this.existing,
+    this.repository,
+    this.fileService,
+  });
 
   /// Null for "Add service"; the service being edited otherwise.
   final ServiceModel? existing;
@@ -56,6 +76,10 @@ class ServiceFormDialog extends StatefulWidget {
   /// Firestore-backed [ServiceRepository].
   final ServiceRepository? repository;
 
+  /// Injectable for widget tests; defaults to a real Supabase-backed
+  /// [FileService].
+  final FileService? fileService;
+
   @override
   State<ServiceFormDialog> createState() => _ServiceFormDialogState();
 }
@@ -63,7 +87,20 @@ class ServiceFormDialog extends StatefulWidget {
 class _ServiceFormDialogState extends State<ServiceFormDialog> {
   late final ServiceRepository _repository =
       widget.repository ?? ServiceRepository();
+  late final FileService _fileService = widget.fileService ?? FileService();
   final _formKey = GlobalKey<FormState>();
+
+  /// BUG FIX — a failed save (e.g. the Supabase image upload throwing)
+  /// used to just silently re-enable the form with no visible sign
+  /// anything went wrong: [_errorMessage]'s [_GlassErrorBanner] renders
+  /// at the very top of this long form, but an admin who has scrolled
+  /// down to Price/Estimated Time (a likely place to be looking right
+  /// before tapping Save) would never see it — the dialog would look
+  /// exactly like nothing happened, indistinguishable from a hang.
+  /// [_scrollController] lets [_submit] scroll back to the top the
+  /// moment an error is set, so the banner is always the first thing
+  /// visible.
+  final _scrollController = ScrollController();
 
   late final _nameController = TextEditingController(
     text: widget.existing?.name ?? '',
@@ -86,6 +123,24 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
   /// `ServiceModel.unit`'s own default.
   late ServiceUnit _unit = widget.existing?.unit ?? ServiceUnit.kilogram;
 
+  // ── Service photo state ────────────────────────────────────────
+  // [_existingImageUrl] is the saved photo being shown (Edit only);
+  // [_pickedImageFile]/[_pickedImageBytes] are a photo picked this
+  // session and not yet uploaded — they take priority for preview.
+  // [_removePhoto] records an explicit Remove of a *saved* photo,
+  // which is different from "nothing changed": _submit needs to know
+  // whether to clear the stored imageUrl or leave it alone.
+  late String? _existingImageUrl = widget.existing?.imageUrl;
+  XFile? _pickedImageFile;
+  Uint8List? _pickedImageBytes;
+  bool _isPickingImage = false;
+  bool _removePhoto = false;
+
+  /// Id for a *new* service, generated once (lazily, on first save) and
+  /// reused if saving fails and the admin retries — so the retry
+  /// overwrites the same Storage object instead of orphaning a new one.
+  late final String _newServiceId = _repository.newServiceId();
+
   bool _isSaving = false;
   String? _errorMessage;
 
@@ -97,7 +152,24 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
     _descriptionController.dispose();
     _priceController.dispose();
     _estimatedTimeController.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  /// Scrolls the form back to the top so a freshly-set
+  /// [_errorMessage]'s banner is guaranteed to be visible, regardless
+  /// of how far down the admin had scrolled when they tapped Save.
+  /// Runs after the current frame so it scrolls against the *new*
+  /// (taller, error-banner-included) content height, not the old one.
+  void _scrollToTop() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) return;
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   String? _requiredField(String? value, String label) {
@@ -115,6 +187,61 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
     return null;
   }
 
+  /// Opens the device's file/photo picker. Validates (JPG/PNG, not
+  /// empty, under 5 MB) right away so a bad file is rejected now, with
+  /// a clear message, rather than after the admin taps Save.
+  Future<void> _pickImage() async {
+    if (_isSaving || _isPickingImage) return;
+
+    XFile? picked;
+    try {
+      picked = await _fileService.pickFromGallery();
+    } catch (_) {
+      if (mounted) {
+        setState(() => _errorMessage = 'Could not open your photos. Please try again.');
+      }
+      return;
+    }
+    if (picked == null) return; // admin cancelled the picker
+
+    setState(() {
+      _isPickingImage = true;
+      _errorMessage = null;
+    });
+    try {
+      await _fileService.validateImage(picked);
+      final bytes = await picked.readAsBytes();
+      if (!mounted) return;
+      setState(() {
+        _pickedImageFile = picked;
+        _pickedImageBytes = bytes;
+        _removePhoto = false;
+      });
+    } on AppException catch (e) {
+      if (mounted) setState(() => _errorMessage = e.message);
+    } catch (_) {
+      if (mounted) {
+        setState(() => _errorMessage = 'Could not load that photo. Please try another.');
+      }
+    } finally {
+      if (mounted) setState(() => _isPickingImage = false);
+    }
+  }
+
+  /// Clears whichever photo is showing (picked or saved). If the
+  /// service already had a saved photo, that's flagged for deletion on
+  /// Save; a picked-but-unsaved photo is simply dropped.
+  void _removeImage() {
+    if (_isSaving) return;
+    setState(() {
+      _removePhoto = (widget.existing?.imageUrl ?? '').trim().isNotEmpty;
+      _pickedImageFile = null;
+      _pickedImageBytes = null;
+      _existingImageUrl = null;
+      _errorMessage = null;
+    });
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -129,6 +256,27 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
     final estimatedTime = _estimatedTimeController.text.trim();
 
     try {
+      final serviceId = _isEditing ? widget.existing!.id : _newServiceId;
+
+      // A newly picked photo is uploaded first — its public URL has to
+      // exist before the document is written. Uploading overwrites the
+      // same Storage path (upsert), so replacing needs no separate
+      // delete step. `null` here means "no new photo": Edit keeps
+      // whatever imageUrl is already saved (or clears it, see below).
+      String? uploadedImageUrl;
+      if (_pickedImageFile != null) {
+        try {
+          uploadedImageUrl = await _fileService.uploadServiceImage(
+            serviceId: serviceId,
+            file: _pickedImageFile!,
+          );
+        } on AppException {
+          rethrow; // already user-facing (bad file, Storage error)
+        } catch (_) {
+          throw const AppException('Could not upload the photo. Please try again.');
+        }
+      }
+
       if (_isEditing) {
         final updated = widget.existing!.copyWith(
           name: name,
@@ -137,27 +285,45 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
           estimatedTime: estimatedTime,
           status: _status,
           unit: _unit,
+          imageUrl: uploadedImageUrl,
+          clearImageUrl: _removePhoto,
         );
         await _repository.updateService(updated);
+
+        // Removing a saved photo deletes its Storage object only
+        // *after* the document stops pointing at it, so a failed save
+        // never leaves the service referencing a deleted image.
+        // Non-fatal: the document is already correct either way.
+        if (_removePhoto) {
+          try {
+            await _fileService.removeServiceImage(serviceId);
+          } catch (_) {}
+        }
       } else {
         await _repository.createService(
           ServiceModel(
-            id: '',
+            id: serviceId,
             name: name,
             description: description,
             pricePerKg: pricePerKg,
             estimatedTime: estimatedTime,
             status: _status,
             unit: _unit,
+            imageUrl: uploadedImageUrl,
           ),
         );
       }
       if (!mounted) return;
       Navigator.pop(context, true);
+    } on AppException catch (e) {
+      setState(() => _errorMessage = e.message);
+      _scrollToTop();
     } on FirebaseException catch (e) {
       setState(() => _errorMessage = e.message ?? 'Unable to save this service.');
+      _scrollToTop();
     } catch (_) {
       setState(() => _errorMessage = 'Something went wrong. Please try again.');
+      _scrollToTop();
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -237,6 +403,7 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
                       const SizedBox(height: 18),
                       Flexible(
                         child: SingleChildScrollView(
+                          controller: _scrollController,
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -251,6 +418,15 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
                                 enabled: !_isSaving,
                                 validator: (v) => _requiredField(v, 'Service name'),
                                 textInputAction: TextInputAction.next,
+                              ),
+                              const SizedBox(height: 12),
+                              ServicePhotoField(
+                                pendingImageBytes: _pickedImageBytes,
+                                existingImageUrl: _existingImageUrl,
+                                isBusy: _isPickingImage,
+                                enabled: !_isSaving,
+                                onPick: _pickImage,
+                                onRemove: _removeImage,
                               ),
                               const SizedBox(height: 12),
                               AppTextField(
