@@ -1,3 +1,4 @@
+// lib/data/datasources/order_datasource.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../../core/services/firebase_service.dart';
@@ -283,6 +284,29 @@ class OrderDatasource {
         .doc(docId)
         .update({'status': newStatus.value, 'updatedAt': FieldValue.serverTimestamp()})
         .timeout(_timeout, onTimeout: () => throw _timeoutException('updating the order status'));
+  }
+
+  /// PART 3 (Order Details → Change Address) — updates only the
+  /// pickup-address fields of a single order document, stamping
+  /// updatedAt with the server's clock exactly like
+  /// [updateOrderStatus] does for status changes.
+  ///
+  /// [fields] is expected to be the subset of [OrderModel.toMap]'s
+  /// keys that describe the pickup address (`address`, `pickupPhone`,
+  /// `pickupFullName`, `pickupStreetAddress`, `pickupRegionName`,
+  /// `pickupProvinceName`, `pickupCityName`, `pickupBarangayName`,
+  /// `pickupPostalCode`) — built by
+  /// [OrderRepository.updateOrderAddress], never the whole
+  /// [OrderModel.toMap]. Using `.update()` with just that subset,
+  /// not `.set()`, means this can never touch pricing, items,
+  /// status, [OrderModel.location], [OrderModel.pickupLandmark], or
+  /// anything else on the order — matching this part's "update only
+  /// this order['s address]" and "do not modify other orders" rules.
+  Future<void> updateOrderAddress(String docId, Map<String, dynamic> fields) async {
+    await _ordersRef
+        .doc(docId)
+        .update({...fields, 'updatedAt': FieldValue.serverTimestamp()})
+        .timeout(_timeout, onTimeout: () => throw _timeoutException('updating the pickup address'));
   }
 
   /// Newest first. createdAt can briefly be null immediately after

@@ -119,11 +119,11 @@ Widget _buildServicePhoto(ServiceModel service, ColorScheme colors) {
   );
 }
 
-/// The bold, colored leading part of the price string, e.g. "$0.80".
+/// The bold, colored leading part of the price string, e.g. "₱0.80".
 /// Split out from [_priceSuffix] so the card can render "Per Kg" in a
 /// lighter weight, matching the reference design's two-tone price.
 String _priceAmount(ServiceModel service) {
-  return '\$${service.pricePerKg.toStringAsFixed(2)}';
+  return '₱${service.pricePerKg.toStringAsFixed(2)}';
 }
 
 /// The plain-weight trailing part of the price string, e.g. "Per Kg"
@@ -131,7 +131,8 @@ String _priceAmount(ServiceModel service) {
 /// hard-coded. Bonus fix found while auditing Part 3's order/receipt
 /// screens: this card previously always showed "Per Kg", even for
 /// Dry Cleaning/Wash & Ironing (which are per-piece — see Part 1).
-String _priceSuffix(ServiceModel service) => ' ${ServiceUnitFormat.perUnitPhrase(service.unit)}';
+String _priceSuffix(ServiceModel service) =>
+    ' ${ServiceUnitFormat.perUnitPhrase(service.unit)}';
 
 /// Compact ETA badge text, e.g. "ETA 2hrs" or "ETA 3days". Empty when
 /// estimatedTime is unset, so the badge simply won't render (see
@@ -144,7 +145,7 @@ String _formatEta(ServiceModel service) {
   if (match == null) return 'ETA $raw';
   final number = match.group(0);
   final unit = raw.toLowerCase().contains('day') ? 'days' : 'hrs';
-  return 'ETA $number$unit';
+  return 'ETA $number $unit';
 }
 
 /// Derives a rough urgency color from the estimated-time string, since

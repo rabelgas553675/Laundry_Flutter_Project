@@ -14,6 +14,7 @@ import '../../../services/printing_service.dart';
 import '../../../services/report_service.dart';
 import '../widgets/report_actions_row.dart';
 import '../widgets/report_date_filter_bar.dart';
+import '../widgets/revenue_line_chart.dart';
 
 /// Fixed content height of the glass app bar (excludes the status-bar
 /// inset, which SafeArea adds on top of this) — matches the same
@@ -223,6 +224,8 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                       final report = ReportService.buildSalesReport(orders, range: range);
                       final completedOrders =
                           ReportService.completedOrdersInRange(orders, range);
+                      final dailyRevenue =
+                          ReportService.buildDailyRevenueSeries(orders, range);
 
                       return ListView(
                         padding: const EdgeInsets.only(bottom: 16),
@@ -255,7 +258,15 @@ class _SalesReportScreenState extends State<SalesReportScreen> {
                             ),
                           ),
                           const SizedBox(height: 12),
+                          GlassContainer(
+                            borderRadius: 24,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                            child: RevenueLineChart(points: dailyRevenue),
+                          ),
+                          const SizedBox(height: 12),
                           _SalesSummaryCard(report: report),
+                          const SizedBox(height: 12),
+                          _FeesBreakdownCard(report: report),
                           const SizedBox(height: 8),
                           Text(
                             '${report.totalOrdersInRange} order(s) placed in this range '
@@ -310,6 +321,49 @@ class _SalesSummaryCard extends StatelessWidget {
             label: 'Average Order Value',
             value: PriceCalculator.formatCurrency(report.averageOrderValue),
             icon: Icons.trending_up_outlined,
+            iconColor: const Color(0xff8B5CF6),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Reusable KPI card for the Sales Report's fee/discount breakdown —
+/// Total Discounts / Pickup Fees / Detergent Fees, each
+/// (see [ReportService.buildSalesReport]). Same [_SalesRow] look as
+/// [_SalesSummaryCard] so both cards read as one KPI family.
+class _FeesBreakdownCard extends StatelessWidget {
+  const _FeesBreakdownCard({required this.report});
+
+  final SalesReportData report;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassContainer(
+      borderRadius: 24,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _SalesRow(
+            label: 'Total Discounts',
+            value: PriceCalculator.formatCurrency(report.totalDiscounts),
+            icon: Icons.local_offer_outlined,
+            iconColor: const Color(0xffFF9500),
+          ),
+          const SizedBox(height: 16),
+          _SalesRow(
+            label: 'Pickup Fees',
+            value: PriceCalculator.formatCurrency(report.totalPickupFees),
+            icon: Icons.local_shipping_outlined,
+            iconColor: const Color(0xff2196F3),
+          ),
+          const SizedBox(height: 16),
+          _SalesRow(
+            label: 'Detergent Fees',
+            value: PriceCalculator.formatCurrency(report.totalDetergentFees),
+            icon: Icons.bubble_chart_outlined,
             iconColor: const Color(0xff8B5CF6),
           ),
         ],

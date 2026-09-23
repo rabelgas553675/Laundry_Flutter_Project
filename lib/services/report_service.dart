@@ -75,6 +75,18 @@ class SalesReportData {
   /// above (e.g. "42 orders in range, 30 completed").
   final int totalOrdersInRange;
 
+  /// SUM(completed orders.discount) — how much was taken off via
+  /// promos/discounts across every completed order in [range].
+  final double totalDiscounts;
+
+  /// SUM(completed orders.pickupFee) across every completed order in
+  /// [range].
+  final double totalPickupFees;
+
+  /// SUM(completed orders.detergentFee) across every completed order
+  /// in [range].
+  final double totalDetergentFees;
+
   /// Null when this report covers all-time (no date filter applied).
   final ReportDateRange? range;
 
@@ -83,8 +95,43 @@ class SalesReportData {
     required this.completedOrders,
     required this.averageOrderValue,
     required this.totalOrdersInRange,
+    this.totalDiscounts = 0,
+    this.totalPickupFees = 0,
+    this.totalDetergentFees = 0,
     required this.range,
   });
+}
+
+/// One point on the Sales Report's "Revenue Trend" line graph: the
+/// SUM(completed orders.total) for a single calendar [date] (whose
+/// time-of-day is always midnight — see
+/// [ReportService.buildDailyRevenueSeries]). [revenue] is exactly
+/// `₱0` for a day with no completed orders — every day in the
+/// requested range gets an entry, never just the days that happen to
+/// have data, so the chart's X-axis is always a contiguous run of
+/// dates.
+class DailyRevenuePoint {
+  final DateTime date;
+  final double revenue;
+
+  const DailyRevenuePoint({required this.date, required this.revenue});
+}
+
+/// One point on the Order Report's "Orders Trend" line graph: the
+/// COUNT of every order placed on a single calendar [date] (whose
+/// time-of-day is always midnight — see
+/// [ReportService.buildDailyOrderCountSeries]), regardless of
+/// status — matching [OrderReportData.totalOrders], which also
+/// counts every order in range regardless of status. [count] is
+/// exactly `0` for a day with no orders at all — every day in the
+/// requested range gets an entry, never just the days that happen to
+/// have data, so the chart's X-axis is always a contiguous run of
+/// dates.
+class DailyOrderCountPoint {
+  final DateTime date;
+  final int count;
+
+  const DailyOrderCountPoint({required this.date, required this.count});
 }
 
 /// PART 19A's Order Report numbers: total orders plus a breakdown by
@@ -196,14 +243,105 @@ class ReportService {
     final totalRevenue = completed.fold<double>(0, (sum, o) => sum + o.total);
     final completedCount = completed.length;
     final average = completedCount == 0 ? 0.0 : totalRevenue / completedCount;
+    final totalDiscounts = completed.fold<double>(0, (sum, o) => sum + o.discount);
+    final totalPickupFees = completed.fold<double>(0, (sum, o) => sum + o.pickupFee);
+    final totalDetergentFees = completed.fold<double>(0, (sum, o) => sum + o.detergentFee);
 
     return SalesReportData(
       totalRevenue: totalRevenue,
       completedOrders: completedCount,
       averageOrderValue: average,
       totalOrdersInRange: inRange.length,
+      totalDiscounts: totalDiscounts,
+      totalPickupFees: totalPickupFees,
+      totalDetergentFees: totalDetergentFees,
       range: range,
     );
+  }
+
+  /// PART 19A — the Sales Report's "Revenue Trend" line graph data:
+  /// one [DailyRevenuePoint] per calendar day in [range] (inclusive
+  /// of both ends), in chronological order.
+  ///
+  /// Only [OrderStatus.completed] orders count towards a day's
+  /// revenue — same rule as [buildSalesReport] — keyed off
+  /// [OrderModel.createdAt]'s calendar day (its time-of-day is
+  /// ignored). A day with no completed orders still gets an entry,
+  /// with `revenue: 0`, so the chart never silently skips a date.
+  ///
+  /// Returns an empty list only if [range] itself is empty/invalid
+  /// (i.e. [ReportDateRange.endExclusive] is not after
+  /// [ReportDateRange.start]) — this should not normally happen for
+  /// a range produced by [resolveRange].
+  static List<DailyRevenuePoint> buildDailyRevenueSeries(
+    List<OrderModel> orders,
+    ReportDateRange range,
+  ) {
+    final completed = ordersInRange(orders, range)
+        .where((o) => o.status == OrderStatus.completed)
+        .toList();
+
+    // Bucket every completed order's revenue by its calendar day
+    // (midnight-normalized) so multiple orders on the same day sum
+    // into the same point.
+    final byDay = <DateTime, double>{};
+    for (final order in completed) {
+      final createdAt = order.createdAt;
+      if (createdAt == null) continue;
+      final day = _dateOnly(createdAt);
+      byDay[day] = (byDay[day] ?? 0) + order.total;
+    }
+
+    final points = <DailyRevenuePoint>[];
+    var cursor = range.start;
+    final lastDay = range.lastInclusiveDay;
+    // Safety cap so a caller-supplied range can never spin this loop
+    // forever (e.g. an accidentally inverted/huge range) — the chart
+    // has no use for more than a few years of daily points anyway.
+    var guard = 0;
+    while (!cursor.isAfter(lastDay) && guard < 3660) {
+      points.add(DailyRevenuePoint(date: cursor, revenue: byDay[cursor] ?? 0));
+      cursor = cursor.add(const Duration(days: 1));
+      guard++;
+    }
+    return points;
+  }
+
+  /// PART 19D — the Order Report's "Orders Trend" line graph data:
+  /// one [DailyOrderCountPoint] per calendar day in [range]
+  /// (inclusive of both ends), in chronological order.
+  ///
+  /// Every order counts here regardless of [OrderStatus] — same rule
+  /// as [buildOrderReport]'s [OrderReportData.totalOrders] — keyed
+  /// off [OrderModel.createdAt]'s calendar day (its time-of-day is
+  /// ignored). A day with no orders at all still gets an entry, with
+  /// `count: 0`, so the chart never silently skips a date.
+  static List<DailyOrderCountPoint> buildDailyOrderCountSeries(
+    List<OrderModel> orders,
+    ReportDateRange range,
+  ) {
+    final inRange = ordersInRange(orders, range);
+
+    // Bucket every order by its calendar day (midnight-normalized)
+    // so multiple orders on the same day count into the same point.
+    final byDay = <DateTime, int>{};
+    for (final order in inRange) {
+      final createdAt = order.createdAt;
+      if (createdAt == null) continue;
+      final day = _dateOnly(createdAt);
+      byDay[day] = (byDay[day] ?? 0) + 1;
+    }
+
+    final points = <DailyOrderCountPoint>[];
+    var cursor = range.start;
+    final lastDay = range.lastInclusiveDay;
+    var guard = 0;
+    while (!cursor.isAfter(lastDay) && guard < 3660) {
+      points.add(DailyOrderCountPoint(date: cursor, count: byDay[cursor] ?? 0));
+      cursor = cursor.add(const Duration(days: 1));
+      guard++;
+    }
+    return points;
   }
 
   /// Every [OrderStatus.completed] order within [range] (or all-time
@@ -254,6 +392,17 @@ class ReportService {
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  /// "Sep 12" — compact, year-less day label for the Revenue Trend
+  /// chart's X-axis and tooltips, where every point already sits
+  /// inside one visible date range so the year would just be noise.
+  static String formatShortDate(DateTime date) {
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${months[date.month - 1]} ${date.day}';
   }
 
   /// "Sep 6 – Sep 12, 2026" (same year) or "Dec 29, 2026 – Jan 4, 2027"

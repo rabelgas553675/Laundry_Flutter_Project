@@ -81,6 +81,12 @@ dependencies:
   # CDN on first use and cached locally afterward.
   google_fonts: ^6.2.1
 
+  # PART 19C — Admin Sales Report analytics: the "Revenue Trend" line
+  # graph on `SalesReportScreen` (see
+  # lib/features/admin/widgets/revenue_line_chart.dart). Not used
+  # anywhere else in the app.
+  fl_chart: ^1.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -113,6 +119,15 @@ flutter:
 
   # To add assets to your application, add an assets section, like this:
   assets:
+    # Bundled Philippine Standard Geographic Code (PSGC) dataset —
+    # every Region, Province, City/Municipality, and Barangay — used
+    # by AddressHierarchyPicker (lib/core/widgets/address_hierarchy_picker.dart)
+    # so the customer's actual address can be anywhere in the
+    # Philippines, not just Digos City. See PhAddressDatasource.
+    - assets/data/ph_regions.json
+    - assets/data/ph_provinces.json
+    - assets/data/ph_cities.json
+    - assets/data/ph_barangays.json
     - assets/images/laundry_hero.jpg
     - assets/images/quick_wash.png
     - assets/images/logo.png

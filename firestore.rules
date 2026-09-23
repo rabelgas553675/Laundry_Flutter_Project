@@ -91,7 +91,39 @@ service cloud.firestore {
         request.resource.data.subtotal is number &&
         request.resource.data.subtotal >= 0;
 
-      allow update: if isAdmin();
+      // PART 3 (Order Details → Change Address) — an admin may still
+      // update anything (status transitions, etc., per
+      // OrderRepository.updateOrderStatus). A regular customer gets
+      // one narrow extra permission on top of "no update at all":
+      // they may update ONLY the pickup-address snapshot fields on an
+      // order that is (a) their own, (b) a Pickup order, and (c)
+      // still `pending` — exactly the same `isAddressEditable` rule
+      // `OrderRepository.updateOrderAddress` already enforces in Dart
+      // — so this mirrors that check server-side rather than trusting
+      // the client alone. `diff(resource.data).affectedKeys()
+      // .hasOnly([...])` is what actually blocks a customer from
+      // sneaking in a status/pricing/`userId` change alongside an
+      // address update: any written field outside this exact list
+      // (including `status` or `userId` themselves) makes the whole
+      // write fail.
+      allow update: if isAdmin() ||
+        (isSignedIn() &&
+          resource.data.userId == request.auth.uid &&
+          resource.data.method == 'pickup' &&
+          resource.data.status == 'pending' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'address',
+            'pickupPhone',
+            'pickupFullName',
+            'pickupStreetAddress',
+            'pickupRegionName',
+            'pickupProvinceName',
+            'pickupCityName',
+            'pickupBarangayName',
+            'pickupPostalCode',
+            'updatedAt'
+          ]));
+
       allow delete: if isAdmin();
     }
 

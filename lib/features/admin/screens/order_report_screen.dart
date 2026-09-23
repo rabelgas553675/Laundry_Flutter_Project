@@ -12,8 +12,10 @@ import '../../../models/order_model.dart';
 import '../../../services/pdf_service.dart';
 import '../../../services/printing_service.dart';
 import '../../../services/report_service.dart';
+import '../widgets/order_volume_line_chart.dart';
 import '../widgets/report_actions_row.dart';
 import '../widgets/report_date_filter_bar.dart';
+import '../widgets/status_breakdown_chart.dart';
 
 /// Fixed content height of the glass app bar (excludes the status-bar
 /// inset, which SafeArea adds on top of this) — matches the same
@@ -205,6 +207,8 @@ class _OrderReportScreenState extends State<OrderReportScreen> {
                         customEnd: _customEnd,
                       );
                       final report = ReportService.buildOrderReport(orders, range: range);
+                      final dailyOrderCounts =
+                          ReportService.buildDailyOrderCountSeries(orders, range);
 
                       return ListView(
                         padding: const EdgeInsets.only(bottom: 16),
@@ -231,6 +235,12 @@ class _OrderReportScreenState extends State<OrderReportScreen> {
                             ),
                           ),
                           const SizedBox(height: 12),
+                          GlassContainer(
+                            borderRadius: 24,
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                            child: OrderVolumeLineChart(points: dailyOrderCounts),
+                          ),
+                          const SizedBox(height: 12),
                           _TotalOrdersCard(total: report.totalOrders),
                           const SizedBox(height: 20),
                           Text(
@@ -248,7 +258,13 @@ class _OrderReportScreenState extends State<OrderReportScreen> {
                                 icon: Icons.inbox_outlined,
                               ),
                             )
-                          else
+                          else ...[
+                            GlassContainer(
+                              borderRadius: 24,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+                              child: StatusBreakdownChart(statusCounts: report.statusCounts),
+                            ),
+                            const SizedBox(height: 12),
                             GlassContainer(
                               borderRadius: 24,
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -262,6 +278,7 @@ class _OrderReportScreenState extends State<OrderReportScreen> {
                                 ],
                               ),
                             ),
+                          ],
                         ],
                       );
                     },

@@ -616,8 +616,6 @@ class _DeliveryInfoCard extends StatelessWidget {
           if (isPickup) ...[
             _Row(label: 'Address', value: order.address ?? '—'),
             _Row(label: 'Phone', value: order.pickupPhone ?? '—'),
-            _Row(label: 'Landmark', value: order.pickupLandmark ?? '—'),
-            _Row(label: 'Location', value: order.location ?? '—'),
           ] else
             const _Row(label: 'Method', value: 'Drop-off at shop'),
         ],

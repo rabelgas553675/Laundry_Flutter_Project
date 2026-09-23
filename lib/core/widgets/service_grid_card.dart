@@ -6,7 +6,7 @@
 // the app looks identical.
 //
 // FIXES IN THIS VERSION
-//  1. "BOTTOM OVERFLOWED BY 4.1 PIXELS": the price ("$70.00 Per Kg") used
+//  1. "BOTTOM OVERFLOWED BY 4.1 PIXELS": the price ("₱70.00 Per Kg") used
 //     to wrap onto two lines in narrow grid cells, making the card taller
 //     than the grid cell. It is now forced onto ONE line and scales down
 //     slightly if the cell is too narrow (FittedBox + scaleDown).
@@ -27,6 +27,7 @@
 //     as a fallback when `imageUrl` is null/empty (see
 //     uploadedImageUrlForService) or fails to load (see errorBuilder
 //     in _ServicePhoto).
+//  4. Price now shows the peso sign (₱) instead of the dollar sign ($).
 //
 // NOTE: ServiceModel exposes a real `unit` field
 // (`core/utils/service_unit.dart`), so the kg-vs-piece question is always
@@ -228,7 +229,7 @@ class ServiceGridCard extends StatelessWidget {
                             children: [
                               TextSpan(
                                 text:
-                                    '\$${service.pricePerKg.toStringAsFixed(2)}',
+                                    '₱${service.pricePerKg.toStringAsFixed(2)}',
                               ),
                               TextSpan(
                                 text:

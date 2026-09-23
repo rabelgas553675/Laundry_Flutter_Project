@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../app/constants.dart';
+import '../../../core/services/auth_state.dart';
 import '../../../core/utils/service_unit.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
@@ -11,20 +12,20 @@ import '../../../core/utils/price_calculator.dart';
 import '../../../core/widgets/detergent_selection.dart';
 import '../../../core/widgets/dropoff_info_card.dart';
 import '../../../core/widgets/laundry_item_selection.dart';
-import '../../../core/widgets/location_selection.dart';
 import '../../../core/widgets/service_selection.dart';
 import '../../../models/detergent_model.dart';
 import '../../../models/laundry_item_model.dart';
-import '../../../models/location_area_model.dart';
 import '../../../models/order_draft_model.dart';
 import '../../../models/order_item_model.dart';
 import '../../../models/promo_model.dart';
 import '../../../models/service_item_model.dart';
 import '../../../models/service_model.dart';
+import '../../../models/user_model.dart';
 import '../widgets/dry_cleaning_item_selection.dart';
 import '../widgets/order_item_card.dart';
 import '../widgets/order_service_header.dart';
 import '../widgets/special_instruction_field.dart';
+import 'address_selection_screen.dart';
 import 'order_summary_screen.dart';
 
 /// How the order gets to/from the customer. UI-only for now — PART 12
@@ -152,17 +153,19 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
   // ---- Step 5: Pickup / Drop-off ----
   DeliveryMethod? _deliveryMethod;
   String? _deliveryMethodError;
-  final _pickupAddressController = TextEditingController();
-  final _pickupPhoneController = TextEditingController();
-  final _pickupLandmarkController = TextEditingController();
-  // PART 10.3 — replaces the PART 10.2 placeholder text field with a
-  // real selection value. See lib/core/widgets/location_selection.dart
-  // and lib/models/location_area_model.dart.
-  LocationAreaModel? _selectedLocationArea;
-  String? _pickupAddressError;
-  String? _pickupPhoneError;
-  String? _pickupLandmarkError;
-  String? _pickupLocationError;
+
+  // PART 2A — Pickup no longer collects a free-text address/phone on
+  // this form. Instead it reuses the same reusable Address Selection
+  // system Profile → Address already uses (`AddressSelectionScreen`,
+  // `SavedAddress`) — see [_openAddressSelection]. The chosen address
+  // carries its own `fullName`/`phone`, which is why there are no
+  // `_pickupAddressController`/`_pickupPhoneController` text fields
+  // any more. The free-text Landmark field has since been removed
+  // from this form entirely (see [_validateDeliveryMethod] and
+  // Step 5's content below) — pickup now only requires a saved
+  // address to have been selected.
+  SavedAddress? _selectedPickupAddress;
+  String? _pickupAddressSelectionError;
 
   // ---- Applied Promo (carried in from OffersScreen, if any) ----
   // PART 3 fix — this used to be read from `widget.initialPromo` in
@@ -191,9 +194,6 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
   void dispose() {
     _weightController.dispose();
     _specialInstructionsController.dispose();
-    _pickupAddressController.dispose();
-    _pickupPhoneController.dispose();
-    _pickupLandmarkController.dispose();
     super.dispose();
   }
 
@@ -290,38 +290,62 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
     if (_deliveryMethod == DeliveryMethod.dropoff) {
       setState(() {
         _deliveryMethodError = null;
-        _pickupAddressError = null;
-        _pickupPhoneError = null;
-        _pickupLandmarkError = null;
-        _pickupLocationError = null;
+        _pickupAddressSelectionError = null;
       });
       return true;
     }
 
-    // Pickup requires Address, Phone, Landmark, and a selected
-    // Location (PART 10.3 — previously just "not empty" on a text
-    // field, now a real selection from LocationSelection).
+    // Pickup requires a saved address to have been picked (PART 2A —
+    // replaces the old "Address is required"/"Phone number is
+    // required" text-field checks: both now come from whichever
+    // `SavedAddress` the customer picked on `AddressSelectionScreen`).
+    // The old free-text Landmark field has been removed from this
+    // form entirely, so there is nothing further to validate for
+    // Pickup beyond the address itself. The old Digos-only "Select
+    // Location" zone picker (Zone 1/Aplaya/Igpit/...) was likewise
+    // removed — the real Region/Province/City/Barangay hierarchy
+    // captured on the saved address already covers this, so there's
+    // no second, narrower location question to answer here.
     final addressError =
-        _pickupAddressController.text.trim().isEmpty ? 'Address is required.' : null;
-    final phoneError =
-        _pickupPhoneController.text.trim().isEmpty ? 'Phone number is required.' : null;
-    final landmarkError =
-        _pickupLandmarkController.text.trim().isEmpty ? 'Landmark is required.' : null;
-    final locationError =
-        _selectedLocationArea == null ? 'Please select your pickup area.' : null;
+        _selectedPickupAddress == null ? 'Please select a pickup address.' : null;
 
     setState(() {
       _deliveryMethodError = null;
-      _pickupAddressError = addressError;
-      _pickupPhoneError = phoneError;
-      _pickupLandmarkError = landmarkError;
-      _pickupLocationError = locationError;
+      _pickupAddressSelectionError = addressError;
     });
 
-    return addressError == null &&
-        phoneError == null &&
-        landmarkError == null &&
-        locationError == null;
+    return addressError == null;
+  }
+
+  /// PART 2A — opens the same reusable Address Selection screen Part 1
+  /// built for Profile → Address (`AddressSelectionScreen`), in its
+  /// `forOrderSelection` mode: picking a card there only affects
+  /// *this order* — it never rewrites the customer's saved
+  /// `selectedAddressId`/default address (see that screen's doc
+  /// comment) — and the screen pops back with the chosen
+  /// [SavedAddress] itself (or `null` if the customer backs out
+  /// without confirming one, in which case the current pick, if any,
+  /// is left untouched).
+  ///
+  /// The customer's own saved address book already lives on
+  /// [AuthState.instance.userModel] — there is no separate address
+  /// store to read here.
+  Future<void> _openAddressSelection() async {
+    final user = AuthState.instance.userModel;
+    if (user == null) return;
+
+    final result = await Navigator.push<SavedAddress>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddressSelectionScreen(user: user, forOrderSelection: true),
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _selectedPickupAddress = result;
+        _pickupAddressSelectionError = null;
+      });
+    }
   }
 
   /// PART 10.3 — validates every step in the whole form at once, not
@@ -435,10 +459,24 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
       weightKg: _isItemized ? 0 : double.parse(_weightController.text.trim()),
       detergent: _selectedDetergent!,
       deliveryMethod: _deliveryMethod!,
-      pickupAddress: isPickup ? _pickupAddressController.text.trim() : null,
-      pickupPhone: isPickup ? _pickupPhoneController.text.trim() : null,
-      pickupLandmark: isPickup ? _pickupLandmarkController.text.trim() : null,
-      pickupLocation: isPickup ? _selectedLocationArea : null,
+      // PART 2A — sourced from the `SavedAddress` picked via
+      // `AddressSelectionScreen`/`_openAddressSelection` instead of
+      // free-text fields. `SavedAddress.orderAddressLine` folds the
+      // recipient's name into the same `order.address` string this
+      // field already mapped to, rather than adding a new OrderModel
+      // field just for it. `pickupPhone` is that address's own phone,
+      // same reasoning.
+      pickupAddress: isPickup ? _selectedPickupAddress!.orderAddressLine : null,
+      pickupPhone: isPickup ? _selectedPickupAddress!.phone : null,
+      // Landmark has been removed from this form entirely — always
+      // omitted now, for both Pickup and Drop-off.
+      pickupLandmark: null,
+      // PART 2B — the picked `SavedAddress` itself (not just its
+      // flattened `orderAddressLine`), so `OrderRepository.createOrder`
+      // can snapshot every structured field (name, street, barangay,
+      // city, province, region, postal code) onto the persisted
+      // order individually. See `OrderDraft.pickupAddressSnapshot`.
+      pickupAddressSnapshot: isPickup ? _selectedPickupAddress : null,
       pickupFee: isPickup ? AppConstants.pickupFee : 0,
       // PART 3 fix — attach whatever promo the customer selected on
       // the Offers screen (or picked up mid-form). `OrderDraft`
@@ -867,11 +905,24 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
                                     _deliveryMethod == null ? const {} : {_deliveryMethod!},
                                 emptySelectionAllowed: true,
                                 onSelectionChanged: (selection) {
+                                  final method =
+                                      selection.isEmpty ? null : selection.first;
                                   setState(() {
-                                    _deliveryMethod =
-                                        selection.isEmpty ? null : selection.first;
+                                    _deliveryMethod = method;
                                     _deliveryMethodError = null;
                                   });
+                                  // PART 2A — the moment the customer
+                                  // chooses Pickup, send them straight
+                                  // into Address Selection (per the
+                                  // Create Order → Pickup → Address
+                                  // Selection → Select Saved Address
+                                  // flow), unless they've already
+                                  // picked one for this order (e.g.
+                                  // they switched to Drop-off and back).
+                                  if (method == DeliveryMethod.pickup &&
+                                      _selectedPickupAddress == null) {
+                                    _openAddressSelection();
+                                  }
                                 },
                               ),
                               if (_deliveryMethodError != null) ...[
@@ -882,70 +933,22 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
                               const SizedBox(height: 16),
 
                               // Pickup fields — only shown when Pickup is chosen.
-                              if (_deliveryMethod == DeliveryMethod.pickup) ...[
-                                AppTextField(
-                                  label: 'Address',
-                                  hint: 'House/unit no., street, barangay',
-                                  controller: _pickupAddressController,
-                                  prefixIcon: Icons.home_outlined,
-                                  maxLines: 2,
-                                  onChanged: (_) =>
-                                      setState(() => _pickupAddressError = null),
+                              // The free-text Landmark field that used to
+                              // sit below the address card has been
+                              // removed entirely — pickup now only needs
+                              // the saved address itself.
+                              if (_deliveryMethod == DeliveryMethod.pickup)
+                                // PART 2A — the saved address the
+                                // customer picked via
+                                // `AddressSelectionScreen`, shown
+                                // read-only here with a "Change"
+                                // action rather than free-text
+                                // Address/Phone fields.
+                                _SelectedPickupAddressCard(
+                                  address: _selectedPickupAddress,
+                                  errorText: _pickupAddressSelectionError,
+                                  onTap: _openAddressSelection,
                                 ),
-                                if (_pickupAddressError != null) ...[
-                                  const SizedBox(height: 4),
-                                  Text(_pickupAddressError!,
-                                      style: TextStyle(color: colors.error)),
-                                ],
-                                const SizedBox(height: 12),
-                                AppTextField(
-                                  label: 'Phone',
-                                  hint: 'e.g. 0917 123 4567',
-                                  controller: _pickupPhoneController,
-                                  keyboardType: TextInputType.phone,
-                                  prefixIcon: Icons.phone_outlined,
-                                  onChanged: (_) =>
-                                      setState(() => _pickupPhoneError = null),
-                                ),
-                                if (_pickupPhoneError != null) ...[
-                                  const SizedBox(height: 4),
-                                  Text(_pickupPhoneError!,
-                                      style: TextStyle(color: colors.error)),
-                                ],
-                                const SizedBox(height: 12),
-                                AppTextField(
-                                  label: 'Landmark',
-                                  hint: 'e.g. Near the barangay hall',
-                                  controller: _pickupLandmarkController,
-                                  prefixIcon: Icons.signpost_outlined,
-                                  onChanged: (_) =>
-                                      setState(() => _pickupLandmarkError = null),
-                                ),
-                                if (_pickupLandmarkError != null) ...[
-                                  const SizedBox(height: 4),
-                                  Text(_pickupLandmarkError!,
-                                      style: TextStyle(color: colors.error)),
-                                ],
-                                const SizedBox(height: 12),
-
-                                // PART 10.3 — real location-selection
-                                // interface, replacing the PART 10.2
-                                // plain text field.
-                                LocationSelection(
-                                  selected: _selectedLocationArea,
-                                  onChanged: (area) {
-                                    setState(() {
-                                      _selectedLocationArea = area;
-                                      _pickupLocationError = null;
-                                    });
-                                  },
-                                ),
-                                if (_pickupLocationError != null) ...[
-                                  const SizedBox(height: 4),
-                                  Text(_pickupLocationError!,
-                                      style: TextStyle(color: colors.error)),
-                                ],
-                              ],
 
                               // Drop-off info — only shown when Drop-off is chosen.
                               if (_deliveryMethod == DeliveryMethod.dropoff)
@@ -974,6 +977,124 @@ class _LaundryOrderScreenState extends State<LaundryOrderScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// PART 2A — shows the [SavedAddress] the customer picked via
+/// [AddressSelectionScreen] (name, phone, street, locality), or a
+/// prompt to pick one when [address] is still `null`. Either way, the
+/// whole card is tappable and opens the same Address Selection
+/// screen — reusing it rather than re-implementing address entry
+/// inline on this form, per this part's "one reusable address
+/// system" requirement.
+class _SelectedPickupAddressCard extends StatelessWidget {
+  const _SelectedPickupAddressCard({
+    required this.address,
+    required this.errorText,
+    required this.onTap,
+  });
+
+  final SavedAddress? address;
+  final String? errorText;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final address = this.address;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onTap,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: colors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: errorText != null
+                      ? colors.error
+                      : colors.outlineVariant.withValues(alpha: 0.6),
+                ),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.home_outlined, color: colors.primary),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: address == null
+                        ? Text(
+                            'Select a pickup address',
+                            style: textTheme.bodyLarge?.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: colors.onSurfaceVariant,
+                            ),
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      address.fullName,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: textTheme.bodyLarge?.copyWith(
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                                    child: Text('|',
+                                        style: TextStyle(color: colors.onSurfaceVariant)),
+                                  ),
+                                  Flexible(
+                                    child: Text(
+                                      address.phone,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: textTheme.bodyMedium
+                                          ?.copyWith(color: colors.onSurfaceVariant),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              if (address.streetLine.isNotEmpty)
+                                Text(address.streetLine, style: textTheme.bodyMedium),
+                              if (address.localityLine.isNotEmpty)
+                                Text(
+                                  address.localityLine,
+                                  style: textTheme.bodySmall
+                                      ?.copyWith(color: colors.onSurfaceVariant),
+                                ),
+                            ],
+                          ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    address == null ? 'Select' : 'Change',
+                    style: TextStyle(color: colors.primary, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        if (errorText != null) ...[
+          const SizedBox(height: 4),
+          Text(errorText!, style: TextStyle(color: colors.error)),
+        ],
+      ],
     );
   }
 }

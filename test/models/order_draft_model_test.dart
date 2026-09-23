@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:laundry_flutter/core/utils/service_unit.dart';
 import 'package:laundry_flutter/features/user/screens/laundry_order_screen.dart' show DeliveryMethod;
 import 'package:laundry_flutter/models/detergent_model.dart';
-import 'package:laundry_flutter/models/location_area_model.dart';
 import 'package:laundry_flutter/models/order_draft_model.dart';
 import 'package:laundry_flutter/models/order_item_model.dart';
 import 'package:laundry_flutter/models/service_item_model.dart';
@@ -56,8 +55,6 @@ const _dress = ServiceItemModel(
   name: 'Dress',
   price: 150,
 );
-
-const _pickupArea = LocationAreaModel(id: 'poblacion', label: 'Zone 1 – Poblacion');
 
 OrderDraft _draftFor(ServiceModel service, {double weightKg = 3}) {
   return OrderDraft(
@@ -175,7 +172,6 @@ void main() {
         weightKg: 5,
         detergent: _premiumDetergent,
         deliveryMethod: DeliveryMethod.pickup,
-        pickupLocation: _pickupArea,
       );
       final errors = draft.validate();
       expect(errors, contains('Pickup requires an address.'));
@@ -190,7 +186,6 @@ void main() {
         deliveryMethod: DeliveryMethod.pickup,
         pickupAddress: '   ',
         pickupPhone: '09171234567',
-        pickupLocation: _pickupArea,
       );
       expect(draft.validate(), contains('Pickup requires an address.'));
     });
@@ -204,7 +199,6 @@ void main() {
         pickupAddress: '123 Rizal Street',
         pickupPhone: '09171234567',
         pickupLandmark: 'Near the plaza',
-        pickupLocation: _pickupArea,
       );
       expect(draft.isValid, isTrue);
     });
@@ -243,7 +237,6 @@ void main() {
         detergent: _detergent,
         deliveryMethod: DeliveryMethod.pickup,
         pickupAddress: '123 Rizal Street',
-        pickupLocation: _pickupArea,
       );
       final errors = draft.validate();
       expect(errors.length, 2);

@@ -10,6 +10,7 @@ import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_text_field.dart';
 import '../../../core/widgets/loading_widget.dart';
 import '../../../models/user_model.dart';
+import 'address_selection_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key, this.embedded = false});
@@ -48,14 +49,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ..showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
-          backgroundColor: isError ? colorScheme.error : colorScheme.inverseSurface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          backgroundColor: isError
+              ? colorScheme.error
+              : colorScheme.inverseSurface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
           margin: const EdgeInsets.all(16),
           content: Row(
             children: [
               Icon(
-                isError ? Icons.error_outline_rounded : Icons.check_circle_outline_rounded,
-                color: isError ? colorScheme.onError : colorScheme.onInverseSurface,
+                isError
+                    ? Icons.error_outline_rounded
+                    : Icons.check_circle_outline_rounded,
+                color: isError
+                    ? colorScheme.onError
+                    : colorScheme.onInverseSurface,
                 size: 20,
               ),
               const SizedBox(width: 12),
@@ -63,7 +72,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 child: Text(
                   message,
                   style: TextStyle(
-                    color: isError ? colorScheme.onError : colorScheme.onInverseSurface,
+                    color: isError
+                        ? colorScheme.onError
+                        : colorScheme.onInverseSurface,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -101,9 +112,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 8),
                 Text(
                   'Profile Photo',
-                  style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  style: Theme.of(sheetContext).textTheme.titleMedium
+                      ?.copyWith(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 12),
                 _SheetOption(
@@ -153,7 +163,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     setState(() => _isUploadingImage = true);
     try {
-      final url = await _fileService.uploadProfileImage(uid: user.uid, file: picked);
+      final url = await _fileService.uploadProfileImage(
+        uid: user.uid,
+        file: picked,
+      );
       final updated = user.copyWith(profileImageUrl: url);
       await AuthState.sharedUserRepository.updateProfile(updated);
       AuthState.instance.updateUserModel(updated);
@@ -163,7 +176,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } on AppException catch (e) {
       _showMessage(e.message, isError: true);
     } catch (_) {
-      _showMessage('Could not upload the photo. Please try again.', isError: true);
+      _showMessage(
+        'Could not upload the photo. Please try again.',
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => _isUploadingImage = false);
     }
@@ -185,7 +201,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } on AppException catch (e) {
       _showMessage(e.message, isError: true);
     } catch (_) {
-      _showMessage('Could not remove the photo. Please try again.', isError: true);
+      _showMessage(
+        'Could not remove the photo. Please try again.',
+        isError: true,
+      );
     } finally {
       if (mounted) setState(() => _isUploadingImage = false);
     }
@@ -201,63 +220,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     AuthState.instance.updateUserModel(updated);
     if (!mounted) return;
     setState(() => _user = updated);
-  }
-
-  void _showEmailInfoSheet() {
-    final user = _user;
-    if (user == null) return;
-    final colorScheme = Theme.of(context).colorScheme;
-
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: colorScheme.surfaceContainerLow,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const SizedBox(height: 8),
-                Text(
-                  'Email',
-                  style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Your email is tied to sign-in and can\'t be changed here.',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: colorScheme.surface,
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: colorScheme.outlineVariant),
-                  ),
-                  child: Text(
-                    user.email,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Future<void> _showEditProfileSheet() async {
@@ -313,9 +275,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       const SizedBox(height: 8),
                       Text(
                         'Profile Setting',
-                        style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
+                        style: Theme.of(sheetContext).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 18),
                       AppTextField(
@@ -339,7 +300,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         onPressed: isSaving
                             ? null
                             : () async {
-                                if (!(formKey.currentState?.validate() ?? false)) return;
+                                if (!(formKey.currentState?.validate() ??
+                                  false)) {
+                                  return;
+                                }
                                 setSheetState(() => isSaving = true);
                                 try {
                                   final updated = user.copyWith(
@@ -347,7 +311,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     phone: phoneController.text.trim(),
                                   );
                                   await _saveUser(updated);
-                                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                                  if (sheetContext.mounted) {
+                                    Navigator.pop(sheetContext);
+                                  }
                                   _showMessage('Profile updated.');
                                 } catch (_) {
                                   _showMessage(
@@ -373,94 +339,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
     phoneController.dispose();
   }
 
-  Future<void> _showEditAddressSheet() async {
+  /// Opens the dedicated full-page Edit Address screen (Profile →
+  /// Address) instead of the old, cramped bottom sheet. Pushed via
+  /// `Navigator.push` like every other full-page screen in the app
+  /// (Notifications, My Orders, etc.) — [EditAddressScreen] manages
+  /// its own save/delete calls and pops back with the updated
+  /// [UserModel] so this screen can refresh its local copy.
+  Future<void> _openAddressSelectionScreen() async {
     final user = _user;
     if (user == null) return;
 
-    final formKey = GlobalKey<FormState>();
-    final addressController = TextEditingController(text: user.address);
-    bool isSaving = false;
-
-    final colorScheme = Theme.of(context).colorScheme;
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      backgroundColor: colorScheme.surfaceContainerLow,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (sheetContext, setSheetState) {
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 4,
-                bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
-              ),
-              child: SafeArea(
-                top: false,
-                child: Form(
-                  key: formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 8),
-                      Text(
-                        'Address',
-                        style: Theme.of(sheetContext).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                      const SizedBox(height: 18),
-                      AppTextField(
-                        label: 'Address',
-                        controller: addressController,
-                        prefixIcon: Icons.home_outlined,
-                        maxLines: 2,
-                        validator: (v) => (v ?? '').trim().isEmpty ? 'Address is required.' : null,
-                      ),
-                      const SizedBox(height: 22),
-                      AppButton(
-                        label: isSaving ? 'Saving...' : 'Save Changes',
-                        isLoading: isSaving,
-                        onPressed: isSaving
-                            ? null
-                            : () async {
-                                if (!(formKey.currentState?.validate() ?? false)) return;
-                                setSheetState(() => isSaving = true);
-                                try {
-                                  final updated = user.copyWith(
-                                    address: addressController.text.trim(),
-                                  );
-                                  await _saveUser(updated);
-                                  if (sheetContext.mounted) Navigator.pop(sheetContext);
-                                  _showMessage('Address updated.');
-                                } catch (_) {
-                                  _showMessage(
-                                    'Could not save your changes. Please try again.',
-                                    isError: true,
-                                  );
-                                } finally {
-                                  setSheetState(() => isSaving = false);
-                                }
-                              },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
+    final result = await Navigator.push<UserModel>(
+      context,
+      MaterialPageRoute(builder: (_) => AddressSelectionScreen(user: user)),
     );
-
-    addressController.dispose();
+    if (result != null && mounted) {
+      setState(() => _user = result);
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -483,7 +378,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return const LoadingWidget(message: 'Loading profile...');
     }
 
-    final topPadding = widget.embedded ? 0.0 : MediaQuery.of(context).padding.top;
+    final topPadding = widget.embedded
+        ? 0.0
+        : MediaQuery.of(context).padding.top;
 
     // Outer corner radius for the whole panel (the edges you circled) —
     // slightly larger than the inner glass panels' radius so the rounding
@@ -537,9 +434,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       Text(
                         'Profile',
                         textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
+                        style: Theme.of(context).textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 16),
                     ],
@@ -557,16 +453,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               _ProfileAvatar(
                                 imageUrl: user.profileImageUrl,
                                 isUploading: _isUploadingImage,
-                                onEditTap: _isUploadingImage ? null : _showImageOptions,
+                                onEditTap: _isUploadingImage
+                                    ? null
+                                    : _showImageOptions,
                                 radius: _kRadius + 34,
                               ),
                               const SizedBox(height: 14),
                               Text(
                                 user.name,
                                 textAlign: TextAlign.center,
-                                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                    ),
+                                style: Theme.of(context).textTheme.headlineSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700),
                               ),
                               const SizedBox(height: 4),
                               Row(
@@ -580,7 +477,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   const SizedBox(width: 4),
                                   Flexible(
                                     child: Text(
-                                      user.address.isEmpty ? 'No address set' : user.address,
+                                      user.address.isEmpty
+                                          ? 'No address set'
+                                          : user.address,
                                       textAlign: TextAlign.center,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
@@ -610,7 +509,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Padding(
-                                padding: const EdgeInsets.only(left: 4, bottom: 8),
+                                padding: const EdgeInsets.only(
+                                  left: 4,
+                                  bottom: 8,
+                                ),
                                 child: Text(
                                   'General',
                                   style: TextStyle(
@@ -621,21 +523,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 ),
                               ),
                               _ProfileListRow(
-                                icon: Icons.mail_outline_rounded,
-                                label: 'Email',
-                                onTap: _showEmailInfoSheet,
+                                icon: Icons.location_on_outlined,
+                                label: 'Address',
+                                onTap: _openAddressSelectionScreen,
                                 radius: _kRadius - 8,
                               ),
                               _ProfileListRow(
                                 icon: Icons.person_outline_rounded,
                                 label: 'Profile Setting',
                                 onTap: _showEditProfileSheet,
-                                radius: _kRadius - 8,
-                              ),
-                              _ProfileListRow(
-                                icon: Icons.location_on_outlined,
-                                label: 'Address',
-                                onTap: _showEditAddressSheet,
                                 radius: _kRadius - 8,
                                 isLast: true,
                               ),
@@ -661,9 +557,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return _buildBody();
     }
 
-    return Scaffold(
-      body: _buildBody(),
-    );
+    return Scaffold(body: _buildBody());
   }
 }
 
@@ -685,6 +579,7 @@ class _GlassPanel extends StatelessWidget {
   final BorderRadius borderRadius;
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry? margin;
+
   /// Overrides the neutral `colorScheme.surface` tint with a fixed color —
   /// used here to match the reference design's cool near-white frost.
   final Color? tintColor;
@@ -767,7 +662,9 @@ class _ProfileAvatar extends StatelessWidget {
               child: CircleAvatar(
                 radius: resolvedRadius,
                 backgroundColor: colorScheme.primary.withValues(alpha: 0.12),
-                backgroundImage: imageUrl != null ? NetworkImage(imageUrl!) : null,
+                backgroundImage: imageUrl != null
+                    ? NetworkImage(imageUrl!)
+                    : null,
                 child: imageUrl == null
                     ? Icon(
                         Icons.person_rounded,

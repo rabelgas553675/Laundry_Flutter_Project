@@ -1,8 +1,10 @@
+// lib/models/order_model.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../core/utils/service_unit.dart';
 import '../features/user/screens/laundry_order_screen.dart' show DeliveryMethod;
 import 'order_item_model.dart';
+import 'user_model.dart' show SavedAddress;
 
 /// The lifecycle a placed order moves through, per PART 14's tracking
 /// workflow:
@@ -142,12 +144,43 @@ class OrderModel {
   final String? location;
 
   /// Not in the literal PART 12.1 field list. The PART 10.2 form also
-  /// collects a pickup phone number and landmark — dropping them here
-  /// would mean an admin (PART 16) could never see how to actually
-  /// reach the customer for their pickup, so they're kept as optional
-  /// extras alongside [address]/[location]. Null for Drop-off.
+  /// collects a pickup phone number — dropping it here would mean an
+  /// admin (PART 16) could never see how to actually reach the
+  /// customer for their pickup, so it's kept as an optional extra
+  /// alongside [address]/[location]. Null for Drop-off.
+  ///
+  /// The order form's separate free-text Landmark field has since
+  /// been removed from the app entirely (see
+  /// `laundry_order_screen.dart`), so this model no longer carries a
+  /// `pickupLandmark` field either — nothing upstream produces a
+  /// value for it any more.
   final String? pickupPhone;
-  final String? pickupLandmark;
+
+  /// PART 2B — the structured components of the [SavedAddress] the
+  /// customer picked on `AddressSelectionScreen`, captured as a
+  /// point-in-time snapshot at order-creation (see
+  /// `OrderRepository.createOrder`). [address] already folds all of
+  /// these into one display-ready string (`SavedAddress
+  /// .orderAddressLine`) — these fields don't replace it, they exist
+  /// alongside it so an admin/report screen can read (or one day
+  /// filter/search on) a specific piece — the recipient's name, the
+  /// street line, or just the city — without re-parsing [address]'s
+  /// free text. Every field here is copied once, at order-creation
+  /// time, from the [SavedAddress] the customer had selected at that
+  /// moment: exactly like [address]/[pickupPhone], none of these
+  /// ever change if the customer later edits or deletes that saved
+  /// address, or changes their default — this order keeps showing
+  /// precisely what it showed the day it was placed. Null for
+  /// Drop-off, and for any order placed before this field existed (a
+  /// pre-existing document simply has no key for these — [address]
+  /// alone still displays correctly for it, same as always).
+  final String? pickupFullName;
+  final String? pickupStreetAddress;
+  final String? pickupRegionName;
+  final String? pickupProvinceName;
+  final String? pickupCityName;
+  final String? pickupBarangayName;
+  final String? pickupPostalCode;
 
   /// PART 3 fix — the customer's optional free-text note
   /// (`OrderDraft.specialInstructions`, e.g. "Handle carefully")
@@ -210,7 +243,13 @@ class OrderModel {
     this.address,
     this.location,
     this.pickupPhone,
-    this.pickupLandmark,
+    this.pickupFullName,
+    this.pickupStreetAddress,
+    this.pickupRegionName,
+    this.pickupProvinceName,
+    this.pickupCityName,
+    this.pickupBarangayName,
+    this.pickupPostalCode,
     this.specialInstructions,
     required this.subtotal,
     this.detergentFee = 0,
@@ -279,7 +318,13 @@ class OrderModel {
       'address': address,
       'location': location,
       'pickupPhone': pickupPhone,
-      'pickupLandmark': pickupLandmark,
+      'pickupFullName': pickupFullName,
+      'pickupStreetAddress': pickupStreetAddress,
+      'pickupRegionName': pickupRegionName,
+      'pickupProvinceName': pickupProvinceName,
+      'pickupCityName': pickupCityName,
+      'pickupBarangayName': pickupBarangayName,
+      'pickupPostalCode': pickupPostalCode,
       'specialInstructions': specialInstructions,
       'subtotal': subtotal,
       'detergentFee': detergentFee,
@@ -298,6 +343,10 @@ class OrderModel {
   /// [toMap] produces, or `doc.data()`). [id] is passed separately
   /// because a raw Firestore map never contains its own document ID —
   /// see [OrderModel.fromFirestore], which supplies it automatically.
+  ///
+  /// A legacy document that still has a `pickupLandmark` key (written
+  /// before that field was removed from the app) simply has that key
+  /// ignored here — it's never read into an [OrderModel] any more.
   factory OrderModel.fromMap(Map<String, dynamic> map, {String? id}) {
     final serviceName = map['serviceName'] as String? ?? '';
     return OrderModel(
@@ -319,7 +368,13 @@ class OrderModel {
       address: map['address'] as String?,
       location: map['location'] as String?,
       pickupPhone: map['pickupPhone'] as String?,
-      pickupLandmark: map['pickupLandmark'] as String?,
+      pickupFullName: map['pickupFullName'] as String?,
+      pickupStreetAddress: map['pickupStreetAddress'] as String?,
+      pickupRegionName: map['pickupRegionName'] as String?,
+      pickupProvinceName: map['pickupProvinceName'] as String?,
+      pickupCityName: map['pickupCityName'] as String?,
+      pickupBarangayName: map['pickupBarangayName'] as String?,
+      pickupPostalCode: map['pickupPostalCode'] as String?,
       specialInstructions: map['specialInstructions'] as String?,
       subtotal: (map['subtotal'] as num?)?.toDouble() ?? 0,
       detergentFee: (map['detergentFee'] as num?)?.toDouble() ?? 0,
@@ -364,7 +419,13 @@ class OrderModel {
       'address': address,
       'location': location,
       'pickupPhone': pickupPhone,
-      'pickupLandmark': pickupLandmark,
+      'pickupFullName': pickupFullName,
+      'pickupStreetAddress': pickupStreetAddress,
+      'pickupRegionName': pickupRegionName,
+      'pickupProvinceName': pickupProvinceName,
+      'pickupCityName': pickupCityName,
+      'pickupBarangayName': pickupBarangayName,
+      'pickupPostalCode': pickupPostalCode,
       'specialInstructions': specialInstructions,
       'subtotal': subtotal,
       'detergentFee': detergentFee,
@@ -396,7 +457,13 @@ class OrderModel {
       address: json['address'] as String?,
       location: json['location'] as String?,
       pickupPhone: json['pickupPhone'] as String?,
-      pickupLandmark: json['pickupLandmark'] as String?,
+      pickupFullName: json['pickupFullName'] as String?,
+      pickupStreetAddress: json['pickupStreetAddress'] as String?,
+      pickupRegionName: json['pickupRegionName'] as String?,
+      pickupProvinceName: json['pickupProvinceName'] as String?,
+      pickupCityName: json['pickupCityName'] as String?,
+      pickupBarangayName: json['pickupBarangayName'] as String?,
+      pickupPostalCode: json['pickupPostalCode'] as String?,
       specialInstructions: json['specialInstructions'] as String?,
       subtotal: (json['subtotal'] as num?)?.toDouble() ?? 0,
       detergentFee: (json['detergentFee'] as num?)?.toDouble() ?? 0,
@@ -437,7 +504,13 @@ class OrderModel {
       address: address,
       location: location,
       pickupPhone: pickupPhone,
-      pickupLandmark: pickupLandmark,
+      pickupFullName: pickupFullName,
+      pickupStreetAddress: pickupStreetAddress,
+      pickupRegionName: pickupRegionName,
+      pickupProvinceName: pickupProvinceName,
+      pickupCityName: pickupCityName,
+      pickupBarangayName: pickupBarangayName,
+      pickupPostalCode: pickupPostalCode,
       specialInstructions: specialInstructions,
       subtotal: subtotal,
       detergentFee: detergentFee,
@@ -448,6 +521,66 @@ class OrderModel {
       promoDiscountLabel: promoDiscountLabel,
       status: status ?? this.status,
       createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  /// PART 3 (Order Details → Change Address) — returns a copy of this
+  /// order with its pickup-address snapshot replaced by [address],
+  /// leaving every other field (status, pricing, items, service,
+  /// [location], ...) untouched.
+  ///
+  /// This mirrors exactly what [OrderRepository.createOrder] already
+  /// copies from a `SavedAddress` at order-creation time (see
+  /// [pickupFullName]'s doc comment) — [address] and [pickupPhone]
+  /// plus the structured `pickup*` fields — so "changing" an order's
+  /// address later produces the same shape of snapshot as picking one
+  /// during checkout, just re-run against a different [SavedAddress].
+  ///
+  /// Deliberately does **not** touch [location]: it never came from
+  /// the saved address book in the first place (it's collected
+  /// separately on the order form — see `LocationSelection` in
+  /// `laundry_order_screen.dart`), so `AddressSelectionScreen` has no
+  /// value for it to offer here. Per the "where applicable" wording
+  /// in this part's spec, it simply stays whatever it already was on
+  /// this order.
+  ///
+  /// [updatedAt] is left for the caller to stamp from the server's
+  /// clock (see `OrderDatasource.updateOrderAddress`) rather than set
+  /// here, matching how [toMap] already treats a null [updatedAt].
+  OrderModel copyWithPickupAddress(SavedAddress address, {DateTime? updatedAt}) {
+    return OrderModel(
+      id: id,
+      orderNumber: orderNumber,
+      userId: userId,
+      serviceId: serviceId,
+      serviceName: serviceName,
+      weight: weight,
+      serviceUnit: serviceUnit,
+      detergentId: detergentId,
+      detergentName: detergentName,
+      items: items,
+      method: method,
+      address: address.orderAddressLine,
+      location: location,
+      pickupPhone: address.phone,
+      pickupFullName: address.fullName,
+      pickupStreetAddress: address.streetAddress,
+      pickupRegionName: address.regionName,
+      pickupProvinceName: address.provinceName,
+      pickupCityName: address.cityName,
+      pickupBarangayName: address.barangayName,
+      pickupPostalCode: address.postalCode,
+      specialInstructions: specialInstructions,
+      subtotal: subtotal,
+      detergentFee: detergentFee,
+      pickupFee: pickupFee,
+      discount: discount,
+      total: total,
+      promoCode: promoCode,
+      promoDiscountLabel: promoDiscountLabel,
+      status: status,
+      createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }

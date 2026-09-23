@@ -121,12 +121,6 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
       if ((order.pickupPhone ?? '').trim().isEmpty) {
         return 'Pickup phone number is missing. Please go back and fill it in.';
       }
-      if ((order.pickupLandmark ?? '').trim().isEmpty) {
-        return 'Pickup landmark is missing. Please go back and fill it in.';
-      }
-      if (order.pickupLocation == null) {
-        return 'Pickup area is missing. Please go back and select one.';
-      }
     }
     return null;
   }
@@ -192,6 +186,16 @@ class _OrderSummaryScreenState extends State<OrderSummaryScreen> {
 
     debugPrint('OrderSummaryScreen: order creation failed: $error');
     debugPrintStack(stackTrace: stackTrace);
+
+    // PART 2B — `OrderRepository.createOrder`'s own pickup-address
+    // validation (a defense-in-depth backstop behind [_validate]
+    // above) throws this with the exact customer-facing copy already
+    // baked in — e.g. "Please select a pickup address." — so it's
+    // shown verbatim instead of falling through to the generic
+    // "Unable to place your order" message below.
+    if (error is OrderValidationException) {
+      return error.message;
+    }
 
     if (error is FirebaseException) {
       debugPrint(
@@ -823,8 +827,6 @@ class _DeliveryCard extends StatelessWidget {
           if (order.isPickup) ...[
             _SummaryRow(label: 'Address', value: order.pickupAddress ?? '—'),
             _SummaryRow(label: 'Phone', value: order.pickupPhone ?? '—'),
-            _SummaryRow(label: 'Landmark', value: order.pickupLandmark ?? '—'),
-            _SummaryRow(label: 'Location', value: order.pickupLocation?.label ?? '—'),
           ] else
             const DropoffInfoCard(),
         ],

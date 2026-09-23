@@ -1,10 +1,34 @@
+// lib/data/repositories/order_repository.dart
 import '../../core/utils/price_calculator.dart';
+import '../../features/user/screens/laundry_order_screen.dart' show DeliveryMethod;
 import '../../models/order_draft_model.dart';
 import '../../models/order_item_model.dart';
 import '../../models/order_model.dart';
 import '../../models/promo_model.dart';
+import '../../models/user_model.dart' show SavedAddress;
 import '../datasources/order_datasource.dart';
 import 'promo_repository.dart';
+
+/// PART 2B — thrown by [OrderRepository.createOrder]'s pre-write
+/// validation pass (see [OrderRepository._validatePickupAddress])
+/// when a Pickup [OrderDraft] reaches this repository without a
+/// valid, complete pickup address attached.
+///
+/// This is deliberately its own type rather than a raw [StateError]/
+/// [ArgumentError] so callers (`OrderSummaryScreen._friendlyErrorMessage`)
+/// can tell "the draft itself is incomplete" apart from a genuine
+/// Firestore/network failure and show [message] verbatim — it's
+/// already the exact, short, customer-facing copy this part's spec
+/// asks for (e.g. "Please select a pickup address.") — instead of the
+/// generic "Unable to place your order" fallback.
+class OrderValidationException implements Exception {
+  const OrderValidationException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 /// PART 12.3 — sits between the app (PART 12.4's Order Summary
 /// screen) and [OrderDatasource]'s raw Firestore calls. Same split as
@@ -135,6 +159,49 @@ class OrderRepository {
 
   // -------------------- Order creation --------------------
 
+  /// PART 2B — the repository's own defense-in-depth gate for Pickup
+  /// orders, run first thing inside [createOrder], before an order
+  /// number is generated or anything is written to Firestore.
+  ///
+  /// [laundry_order_screen.dart]'s `_validateDeliveryMethod` and
+  /// [OrderSummaryScreen]'s `_validate` already block a customer from
+  /// reaching this point without a selected address in the normal UI
+  /// flow — this exists for the same reason [_resolvePromo] re-checks
+  /// a promo right before persisting rather than trusting the UI's
+  /// earlier check: [createOrder] is the single choke point every
+  /// order — from this screen or any future caller — must pass
+  /// through to actually reach the database, so it's the right place
+  /// to make "no Pickup order is ever persisted without a valid
+  /// address" a guarantee of the data layer itself, not just the
+  /// current UI.
+  ///
+  /// Drop-off is untouched — this only runs for
+  /// `draft.deliveryMethod == DeliveryMethod.pickup`, and never
+  /// requires an address for Drop-off, matching [OrderDraft.validate]'s
+  /// existing rule and this part's "do not change Drop-off behavior"
+  /// requirement.
+  ///
+  /// Throws [OrderValidationException] with the exact copy this
+  /// part's spec calls for when no address was ever selected, or with
+  /// [OrderDraft.validate]'s own message for any other missing
+  /// required field (phone, landmark, pickup area) — reusing that
+  /// single existing validator (PART 6) rather than re-implementing
+  /// the same rules a second time here.
+  void _validatePickupAddress(OrderDraft draft) {
+    if (draft.deliveryMethod != DeliveryMethod.pickup) return;
+
+    final hasAddress = draft.pickupAddressSnapshot != null ||
+        (draft.pickupAddress != null && draft.pickupAddress!.trim().isNotEmpty);
+    if (!hasAddress) {
+      throw const OrderValidationException('Please select a pickup address.');
+    }
+
+    final errors = draft.validate();
+    if (errors.isNotEmpty) {
+      throw OrderValidationException(errors.first);
+    }
+  }
+
   /// Turns a confirmed PART 11 [OrderDraft] into a persisted
   /// [OrderModel].
   ///
@@ -178,6 +245,13 @@ class OrderRepository {
     required OrderDraft draft,
     required String userId,
   }) async {
+    // PART 2B — verify a Pickup order actually has a complete address
+    // before anything else happens; see [_validatePickupAddress]'s
+    // doc comment for why this has to live here, not just upstream
+    // in the UI. Runs before order-number generation/promo
+    // re-validation so an incomplete draft never even gets that far.
+    _validatePickupAddress(draft);
+
     // PART 3 — resolve the applied promo (if any) one last time
     // against Firestore before pricing/persisting this order. See
     // [_resolvePromo]'s doc comment for why this can't just trust
@@ -220,9 +294,29 @@ class OrderRepository {
           : draft.items.map(OrderItemModel.fromLaundryItem).toList(),
       method: draft.deliveryMethod,
       address: draft.pickupAddress,
-      location: draft.pickupLocation?.label,
+      // The old Digos-only "Select Location" zone picker
+      // (LocationAreaModel: Zone 1/Aplaya/Igpit/...) has been
+      // removed from the order form, so new orders no longer have a
+      // value to put here. `OrderModel.location` is left in place
+      // (unset) purely so existing/historical orders that already
+      // have one keep displaying it correctly.
       pickupPhone: draft.pickupPhone,
-      pickupLandmark: draft.pickupLandmark,
+      // PART 2B — structured snapshot of the selected `SavedAddress`,
+      // captured once, right now, from `draft.pickupAddressSnapshot`
+      // (itself an immutable snapshot already — see that field's doc
+      // comment). `null` for Drop-off, and whenever no snapshot was
+      // attached (shouldn't happen for a Pickup order past
+      // `_validatePickupAddress` above, but this order must never
+      // fail to persist just because the richer, optional snapshot
+      // wasn't available — `address`/`pickupPhone`/`pickupLandmark`
+      // alone already fully describe the pickup either way).
+      pickupFullName: draft.pickupAddressSnapshot?.fullName,
+      pickupStreetAddress: draft.pickupAddressSnapshot?.streetAddress,
+      pickupRegionName: draft.pickupAddressSnapshot?.regionName,
+      pickupProvinceName: draft.pickupAddressSnapshot?.provinceName,
+      pickupCityName: draft.pickupAddressSnapshot?.cityName,
+      pickupBarangayName: draft.pickupAddressSnapshot?.barangayName,
+      pickupPostalCode: draft.pickupAddressSnapshot?.postalCode,
       // PART 3 fix — previously dropped entirely; see the doc
       // comment on `OrderModel.specialInstructions`.
       specialInstructions: draft.specialInstructions,
@@ -355,5 +449,88 @@ class OrderRepository {
     }
 
     await _datasource.updateOrderStatus(orderId, newStatus);
+  }
+
+  // -------------------- PART 3: Order Details → Change Address --------------------
+
+  /// Whether [order]'s pickup address may still be changed from
+  /// [OrderDetailsScreen]'s "Change Address" action.
+  ///
+  /// Per this part's spec ("if the order is already being processed,
+  /// picked up, completed, or cancelled, hide or disable Change
+  /// Address"): only a Drop-off-free, still-[OrderStatus.pending]
+  /// Pickup order qualifies. This app's workflow has no separate
+  /// "assigned for pickup" status between placing an order and an
+  /// Admin acting on it (see [OrderStatus] — the very next step after
+  /// [OrderStatus.pending] is [OrderStatus.received], i.e. the order
+  /// has already reached the shop), so [OrderStatus.pending] is the
+  /// only status where the address a rider/the shop will use hasn't
+  /// started being acted on yet. This reuses the existing
+  /// [OrderStatus] enum/workflow exactly as-is — no new status system
+  /// is introduced, matching this part's "do not create a new status
+  /// system" requirement.
+  static bool isAddressEditable(OrderModel order) {
+    return order.isPickup && order.status == OrderStatus.pending;
+  }
+
+  /// Replaces [order]'s pickup-address snapshot with [address] —
+  /// used only by [OrderDetailsScreen]'s "Change Address" flow, after
+  /// the customer has confirmed the "Change Pickup Address?" dialog.
+  ///
+  /// Re-checks [isAddressEditable] here (not just in the UI, which
+  /// already hides/disables the action per [isAddressEditable]) for
+  /// the same defense-in-depth reason [createOrder] re-validates the
+  /// pickup address and [updateOrderStatus] re-validates the status
+  /// transition, rather than trusting that the button the customer
+  /// tapped was actually still enabled — e.g. an Admin could have
+  /// started processing this exact order in the moment between the
+  /// customer opening Order Details and confirming the dialog.
+  ///
+  /// Only ever updates *this* order's own document — the customer's
+  /// saved [SavedAddress] book, their Profile default address, and
+  /// every other order are never touched (see
+  /// [OrderModel.copyWithPickupAddress]'s doc comment for exactly
+  /// which fields are written, and [OrderDatasource.updateOrderAddress]
+  /// for why a partial `.update()` is used instead of `.set()`).
+  ///
+  /// Returns the updated [OrderModel] (built locally via
+  /// [OrderModel.copyWithPickupAddress]) so the caller can refresh its
+  /// display immediately without a second Firestore read.
+  ///
+  /// Throws [OrderValidationException] if [order] is no longer
+  /// editable, and [ArgumentError] if [order] has no document ID yet
+  /// — same contract as [updateOrderStatus]. Any [FirebaseException]
+  /// from the write itself is left uncaught for the calling screen to
+  /// handle.
+  Future<OrderModel> updateOrderAddress({
+    required OrderModel order,
+    required SavedAddress address,
+  }) async {
+    final orderId = order.id;
+    if (orderId == null) {
+      throw ArgumentError('Cannot update the address of an order with no document ID.');
+    }
+
+    if (!isAddressEditable(order)) {
+      throw const OrderValidationException(
+        'This order can no longer be changed.',
+      );
+    }
+
+    final updated = order.copyWithPickupAddress(address);
+
+    await _datasource.updateOrderAddress(orderId, {
+      'address': updated.address,
+      'pickupPhone': updated.pickupPhone,
+      'pickupFullName': updated.pickupFullName,
+      'pickupStreetAddress': updated.pickupStreetAddress,
+      'pickupRegionName': updated.pickupRegionName,
+      'pickupProvinceName': updated.pickupProvinceName,
+      'pickupCityName': updated.pickupCityName,
+      'pickupBarangayName': updated.pickupBarangayName,
+      'pickupPostalCode': updated.pickupPostalCode,
+    });
+
+    return updated;
   }
 }

@@ -2,10 +2,10 @@ import '../core/utils/service_unit.dart';
 import '../features/user/screens/laundry_order_screen.dart' show DeliveryMethod;
 import 'detergent_model.dart';
 import 'laundry_item_model.dart';
-import 'location_area_model.dart';
 import 'order_item_model.dart';
 import 'promo_model.dart';
 import 'service_model.dart';
+import 'user_model.dart' show SavedAddress;
 
 /// PART 11.2 / PART 1 — a snapshot of everything the customer chose
 /// on the order form, handed to `OrderSummaryScreen` so it has
@@ -74,7 +74,21 @@ class OrderDraft {
   final String? pickupAddress;
   final String? pickupPhone;
   final String? pickupLandmark;
-  final LocationAreaModel? pickupLocation;
+
+  /// PART 2B — the exact [SavedAddress] the customer picked via
+  /// [AddressSelectionScreen]/`_openAddressSelection`, kept alongside
+  /// [pickupAddress] (which only carries [SavedAddress.orderAddressLine],
+  /// the flattened display string) so `OrderRepository.createOrder`
+  /// can snapshot each structured component — full name, street,
+  /// barangay, city, province, region, postal code — onto the
+  /// persisted [OrderModel] individually, not just as one composed
+  /// line. [SavedAddress] is an immutable value object (see its class
+  /// doc), so holding a reference to it here is already a safe,
+  /// independent snapshot: nothing the customer does afterwards on
+  /// Profile → Address (editing that entry, deleting it, changing
+  /// their default) can reach back and mutate the object referenced
+  /// here. Null for Drop-off.
+  final SavedAddress? pickupAddressSnapshot;
 
   /// Flat delivery fee to feed into [PriceCalculator]. 0 for
   /// Drop-off, [AppConstants.pickupFee] for Pickup — decided by
@@ -121,7 +135,7 @@ class OrderDraft {
     this.pickupAddress,
     this.pickupPhone,
     this.pickupLandmark,
-    this.pickupLocation,
+    this.pickupAddressSnapshot,
     this.pickupFee = 0,
     this.discount = 0,
     this.appliedPromo,
@@ -263,7 +277,7 @@ class OrderDraft {
     String? pickupAddress,
     String? pickupPhone,
     String? pickupLandmark,
-    LocationAreaModel? pickupLocation,
+    SavedAddress? pickupAddressSnapshot,
     double? pickupFee,
     double? discount,
     PromoModel? appliedPromo,
@@ -288,7 +302,7 @@ class OrderDraft {
       pickupAddress: pickupAddress ?? this.pickupAddress,
       pickupPhone: pickupPhone ?? this.pickupPhone,
       pickupLandmark: pickupLandmark ?? this.pickupLandmark,
-      pickupLocation: pickupLocation ?? this.pickupLocation,
+      pickupAddressSnapshot: pickupAddressSnapshot ?? this.pickupAddressSnapshot,
       pickupFee: pickupFee ?? this.pickupFee,
       discount: discount ?? this.discount,
       appliedPromo: clearAppliedPromo ? null : (appliedPromo ?? this.appliedPromo),
